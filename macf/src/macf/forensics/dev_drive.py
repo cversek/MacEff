@@ -85,7 +85,7 @@ def extract_dev_drive(
                     continue
                 try:
                     entries.append(json.loads(line))
-                except json.JSONDecodeError:
+                except json.JSONDecodeError:  # noqa: S112 - a transcript is written live by the running session, so a torn last line is normal, and the lookup only needs the lines that parse
                     continue
 
         # Build UUID lookup for fast parentUuid chain following

@@ -38,6 +38,8 @@ from macf.amail import (
 )
 
 DOMAIN = "example.test"
+#: The two test agents' calling cards, which the operator's registry declares keys by.
+ALPHA_CARD, BETA_CARD = "Alpha_0a1b2c", "Beta_3d4e5f"
 
 
 @pytest.fixture
@@ -81,6 +83,9 @@ def deployment(tmp_path, sock_dir):
         # exactly the point: anything it submits is 'alpha', and a claim to be
         # 'beta' must be refused rather than believed.
         agent_uids={os.getuid(): "alpha"},
+        # Each agent's calling card, as a deployment declares it: an agent's configured name
+        # need not be its card, and the registry declares keys by card (MIS-0004 R44).
+        agent_cards={"alpha": ALPHA_CARD, "beta": BETA_CARD},
         # Delivery is by pickup box for agent mail as well as internet mail:
         # one mechanism, and the broker writes only its own stores.
         inbound_handoff=tmp_path / "handoff",
@@ -97,11 +102,12 @@ def deployment(tmp_path, sock_dir):
         agent does."""
         from macf.amail.client import ingest
         ingest(homes[agent], (tmp_path / "handoff") / agent,
-               contacts_path=contacts, agent=agent)
+               contacts_path=contacts, agent=agent, domain=DOMAIN, registry=state.get("registry"))
         return homes[agent]
 
-    return {"cfg": cfg, "broker": Broker(cfg), "homes": homes, "pull": _pull,
-            "contacts": contacts, "tmp": tmp_path, "sock": sock_dir}
+    state = {"cfg": cfg, "broker": Broker(cfg), "homes": homes, "pull": _pull,
+             "contacts": contacts, "tmp": tmp_path, "sock": sock_dir}
+    return state
 
 
 def msg(to=f"beta@{DOMAIN}", sender=f"alpha@{DOMAIN}", subject="s", body="b"):
@@ -353,14 +359,13 @@ class TestEnforcementLocation:
         src = inspect.getsource(client)
         assert "permits" not in src, "authorization must not be client-side"
         assert "push_granted" not in src, "grant evaluation must not be client-side"
-        # And the narrowing must be real: key lookup is the ONLY contact-book
-        # use permitted here, so a future edit reaching for anything else fails.
-        # Two mentions exactly — the import and the single construction.
-        assert src.count("ContactBook") == 2, (
-            "the client's contact-book use must stay limited to one key lookup")
-        assert "keys_for" in src, (
-            "if ingest stopped verifying, this guard's narrowing is no longer "
-            "justified and should be tightened back")
+        # Tightened back, as the narrowing above said it should be once ingest
+        # stopped verifying with the contact book: ingest judges signatures
+        # against the operator's registry now (MIS-0004 R44), so the client
+        # reads no contact book at all.
+        assert "ContactBook" not in src and "keys_for" not in src, (
+            "the client reads no contact book; signatures are judged against the registry")
+        assert "sender_verdict" in src, "ingest still forms its own signature verdict"
 
     def test_client_has_no_fallback_transport(self, tmp_path, sock_dir):
         """With the broker down, sending must fail — not find another way out."""
@@ -2171,7 +2176,27 @@ def keyed(deployment, tmp_path):
     deployment["contacts"].chmod(0o644)
     deployment["beta_key"] = beta_key
     deployment["beta_pub"] = beta_pub
+    declare_keys(deployment, {BETA_CARD: beta_pub})
     return deployment
+
+
+def declare_keys(deployment, keys):
+    """The operator's registry declaring *keys* ({card: public key, or a key entry with its
+    window}), read by the broker and by
+    every pull, as one root-owned file is on a host (MIS-0004 R42, R44). The test's own uid
+    stands in for root."""
+    from macf.amail.registry import Registry
+    d = deployment["tmp"] / "etc"
+    d.mkdir(mode=0o755, exist_ok=True)
+    path = d / "registry.yaml"
+    path.write_text(yaml.safe_dump({"agents": {
+        card: {"account": card.split("_")[0].lower(), "keys": [key]} for card, key in keys.items()}},
+        sort_keys=False))
+    os.chmod(path, 0o644)
+    registry = Registry(path, root_uid=os.getuid())
+    deployment["broker"].registry = registry
+    deployment["registry"] = registry
+    return registry
 
 
 class TestAuthorshipSigning:
@@ -2384,12 +2409,16 @@ class TestTrustIsMintedNotAccepted:
             "beta": [{"address": f"alpha@{DOMAIN}", "key": keyed["beta_pub"]}],
         }))
         keyed["contacts"].chmod(0o644)
-        keyed["broker"].submit("alpha", msg(body="unsigned but keyed"))
+        declare_keys(keyed, {ALPHA_CARD: keyed["beta_pub"]})
+        # Since MIS-0004 R43 the unsigned one never leaves (test_broker_refuses_unsigned_agent_mail),
+        # so the agreement is shown on the message that does: signed with the declared key.
+        signed = msg(body="signed and keyed")
+        signed.signature = sign(signed, load_private_key(keyed["beta_key"]))
+        assert keyed["broker"].submit("alpha", signed)["ok"]
         stored = [x for x in store.read_all(keyed["pull"]("beta"))
-                  if x.body == "unsigned but keyed"][0]
-        assert stored.trust == TrustClass.SUSPECT.value, \
-            "a declared key went unused and the message still claimed to be signed"
-        # And the two mechanisms now agree.
+                  if x.body == "signed and keyed"][0]
+        assert stored.trust == TrustClass.ATTESTED.value
+        # And the two mechanisms agree.
         assert keyed["broker"].classify_inbound(stored, "beta").value == stored.trust
 
     def test_stripping_a_signature_is_self_harm_as_the_spec_claims(self, keyed):
@@ -2401,15 +2430,98 @@ class TestTrustIsMintedNotAccepted:
             "beta": [{"address": f"alpha@{DOMAIN}", "key": keyed["beta_pub"]}],
         }))
         keyed["contacts"].chmod(0o644)
+        declare_keys(keyed, {ALPHA_CARD: keyed["beta_pub"]})
         signed = msg(body="signed")
         signed.signature = sign(signed, load_private_key(keyed["beta_key"]))
         stripped = msg(body="stripped")
         stripped.signature = None
         keyed["broker"].submit("alpha", signed)
-        keyed["broker"].submit("alpha", stripped)
+        refused = keyed["broker"].submit("alpha", stripped)
         got = {x.body: x.trust for x in store.read_all(keyed["pull"]("beta"))}
         assert got["signed"] == TrustClass.ATTESTED.value
-        assert got["stripped"] == TrustClass.SUSPECT.value
+        # Stronger than self-harm since MIS-0004 R43: a declared agent's stripped message is refused
+        # at the broker and reaches nobody, so it can't even arrive marked suspect.
+        assert refused["ok"] is False and "stripped" not in got
+
+    def test_broker_refuses_unsigned_agent_mail(self, keyed):
+        """MIS-0004 R43 (broker_MUST_refuse_unsigned_agent_mail): the broker refuses a declared
+        agent's submission unless its signature verifies against a key declared for that agent and
+        valid at acceptance. The refusal reaches the sender with its reason (R18) and is recorded
+        as the message's fate; nothing is delivered. A sender the registry doesn't declare passes,
+        unverified, since the landing declares first and enforces second."""
+        from macf.amail.client import sent_disposition
+        other = keyed["tmp"] / "keys" / "other.pem"
+        generate_keypair(other)
+        declare_keys(keyed, {ALPHA_CARD: keyed["beta_pub"]})
+        keyed["broker"].config.dispositions_dir = keyed["tmp"] / "dispositions"
+
+        unsigned = keyed["broker"].submit("alpha", msg(body="no signature"))
+        assert unsigned["ok"] is False
+        assert "signature required (MIS-0004 R43)" in unsigned["refused"][0]
+        assert "unsigned" in unsigned["refused"][0]
+        audit = (keyed["tmp"] / "audit.jsonl").read_text()
+        assert unsigned["message_id"] in audit and "signature required (MIS-0004 R43)" in audit, \
+            "the refusal is recorded, not only returned"
+        record = sent_disposition(keyed["broker"].config.dispositions_dir, unsigned["message_id"])
+        assert record and all(r["history"][-1]["state"] == "denied" for r in record["recipients"].values()), \
+            "the refusal is the message's fate"
+
+        forged = msg(body="wrong key")
+        forged.signature = sign(forged, load_private_key(other))
+        assert keyed["broker"].submit("alpha", forged)["ok"] is False
+
+        good = msg(body="declared key")
+        good.signature = sign(good, load_private_key(keyed["beta_key"]))
+        assert keyed["broker"].submit("alpha", good)["ok"] is True
+        bodies = {x.body for x in store.read_all(keyed["pull"]("beta"))}
+        assert bodies == {"declared key"}, "only the signed message was delivered"
+
+        # Undeclared: the registry names no card for alpha, so its unsigned mail passes as before.
+        declare_keys(keyed, {BETA_CARD: keyed["beta_pub"]})
+        assert keyed["broker"].submit("alpha", msg(body="undeclared sender"))["ok"] is True
+
+    def test_an_untrusted_registry_refuses_nothing_and_says_so(self, keyed, capsys):
+        """R43 against a registry that can't be trusted: nothing can be verified, so nothing is
+        refused, and the broker warns on every submission that signatures aren't enforced."""
+        declare_keys(keyed, {ALPHA_CARD: keyed["beta_pub"]})
+        (keyed["tmp"] / "etc" / "registry.yaml").chmod(0o666)  # writable by others: untrusted
+        capsys.readouterr()
+        assert keyed["broker"].submit("alpha", msg(body="unsigned, registry untrusted"))["ok"] is True
+        err = capsys.readouterr().err
+        assert "signatures aren't enforced (R43)" in err and "can't be trusted" in err
+
+    def test_the_broker_and_the_recipient_reach_one_verdict_on_the_same_bytes(self, keyed, tmp_path, capsys):
+        """MIS-0004 R44: the broker's classification, written into the sidecar,
+        and the recipient's own verdict at ingest are one rule over one card at
+        one time, so they agree for every outcome and nothing is logged as a
+        disagreement. If either side read another rule, another card or another
+        time, this fails."""
+        import datetime
+        import json
+        # A key valid from an hour ago, so the time each side judges at matters as much as the
+        # rule and the card: a sidecar time that isn't the broker's own judging time shows here.
+        since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)).isoformat()
+        declare_keys(keyed, {ALPHA_CARD: {"key": keyed["beta_pub"], "valid_from": since}})
+        generate_keypair(tmp_path / "eve.pem")
+        sent = {"signed": keyed["beta_key"], "unsigned": None, "forged": tmp_path / "eve.pem"}
+        replies = {}
+        for body, key in sent.items():
+            m = msg(body=body)
+            if key is not None:
+                m.signature = sign(m, load_private_key(key))
+            replies[body] = keyed["broker"].submit("alpha", m)
+        # Since R43 a declared agent's unsigned or forged submission is refused at the broker, so
+        # through the local path only the signed one reaches the recipient to be judged twice. The
+        # suspect verdicts are R44's receiver tests, and peer mail can still arrive suspect.
+        assert replies["signed"]["ok"] and not replies["unsigned"]["ok"] and not replies["forged"]["ok"]
+        box = keyed["tmp"] / "handoff" / "beta"
+        by_id = {json.loads(s.read_text())["message_id"]: json.loads(s.read_text()) for s in box.glob("*.json")}
+        assert all(meta.get("sender_card") == ALPHA_CARD for meta in by_id.values())
+        capsys.readouterr()
+        stored = store.read_all(keyed["pull"]("beta"))
+        assert "trust disagreement" not in capsys.readouterr().err
+        got = {x.body: (by_id[x.message_id]["broker_trust"], x.trust) for x in stored}
+        assert got == {"signed": ("attested", "attested")}
 
     def test_an_inbound_trust_claim_is_overwritten(self, deployment):
         m = msg(sender="stranger@elsewhere.test", to=[f"beta@{DOMAIN}"])
@@ -2999,6 +3111,7 @@ class TestAuditRecordsEveryRecipientsVerdict:
         }))
         deployment["contacts"].chmod(0o644)
         deployment["alpha_key"] = tmp_path / "alpha.pem"
+        declare_keys(deployment, {ALPHA_CARD: key})
         return deployment
 
     def _verdicts(self, dep):
@@ -3007,12 +3120,15 @@ class TestAuditRecordsEveryRecipientsVerdict:
         return tr if isinstance(tr, dict) else {"__single__": tr}
 
     def test_both_recipients_verdicts_are_recorded(self, three):
+        """Every recipient's verdict is in the record. They agree now: the
+        registry is one declaration for every recipient (MIS-0004 R44), where a
+        contact book once let beta know a key that gamma did not."""
         m = msg(to=[f"beta@{DOMAIN}", f"gamma@{DOMAIN}"], body="signed")
         m.signature = sign(m, load_private_key(three["alpha_key"]))
         three["broker"].submit("alpha", m)
         got = self._verdicts(three)
         assert got.get(f"beta@{DOMAIN}") == TrustClass.ATTESTED.value
-        assert got.get(f"gamma@{DOMAIN}") == TrustClass.UNVERIFIED.value
+        assert got.get(f"gamma@{DOMAIN}") == TrustClass.ATTESTED.value
 
     def test_list_order_cannot_change_what_is_recorded(self, three):
         """The attack: reverse the list and the same delivery logged the other
@@ -3035,10 +3151,14 @@ class TestAuditRecordsEveryRecipientsVerdict:
         generate_keypair(tmp_path / "eve.pem")
         m = msg(to=[f"beta@{DOMAIN}", f"gamma@{DOMAIN}"], body="forged")
         m.signature = sign(m, load_private_key(tmp_path / "eve.pem"))
-        three["broker"].submit("alpha", m)
-        got = self._verdicts(three)
-        assert TrustClass.SUSPECT.value in got.values(), \
-            f"the SUSPECT verdict was suppressed from the broker-owned record: {got}"
+        r = three["broker"].submit("alpha", m)
+        # Since MIS-0004 R43 the verdict is the sender's, not any recipient's, so no recipient list
+        # can soften it: the forged submission is refused outright, and the refusal is what the
+        # broker-owned record keeps.
+        assert r["ok"] is False and "signature required (MIS-0004 R43)" in r["refused"][0]
+        audit = (three["tmp"] / "audit.jsonl").read_text()
+        assert r["message_id"] in audit and "signature required" in audit, \
+            "the forged submission's refusal is missing from the broker-owned record"
 
 
 class TestSenderMustMatchExactly:
@@ -3303,7 +3423,7 @@ class TestAccessFollowsCustody:
         sock = deployment["sock"] / "live.sock"
         srv = self._listening_socket(sock)
         try:
-            monkeypatch.setattr(client, "status", lambda p: {
+            monkeypatch.setattr(client, "status", lambda p, **kw: {
                 "ok": False, "error": "ValueError: unknown operation 'status'"})
             cli = self._cfg(monkeypatch, home, sock)
             cli.cmd_amail_status(Namespace(json=False))
@@ -3329,7 +3449,7 @@ class TestAccessFollowsCustody:
         sock = deployment["sock"] / "live2.sock"
         srv = self._listening_socket(sock)
         try:
-            monkeypatch.setattr(client, "status", lambda p: {
+            monkeypatch.setattr(client, "status", lambda p, **kw: {
                 "ok": True, "messages": 0, "internet": 0,
                 "quarantined": 0, "pending_pickup": 2})
             cli = self._cfg(monkeypatch, home, sock)

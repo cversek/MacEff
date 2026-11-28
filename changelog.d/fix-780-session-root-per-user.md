@@ -1,0 +1,4 @@
+### Fixed
+
+- **Per-session folders default to a directory of the user's own, not a shared `/tmp/macf`** (`utils/paths.py`, `docs/`): the hook log, scratch scripts and caches went under `/tmp/macf/{agent}/{session}/`, and on a host or container with several accounts the first to create `/tmp/macf` owned it, so every other agent's session folders failed to create. The default root is now `sessions` inside `user_runtime_dir()` (`$XDG_RUNTIME_DIR`, else `/tmp/macf-<uid>`, mode 0700), the same place the scope gate's counter already lives. `MACF_SESSION_ROOT` still overrides it. Where that directory isn't the user's own, no session folder is made and a warning says why, so nothing falls back to a shared path (#780).
+  **Upgrade note:** hook logs are now under that directory. `macf_tools hooks logs` finds them there; anything that read `/tmp/macf/<agent>/<session>/hooks/` directly needs the new path.

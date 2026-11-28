@@ -1,9 +1,10 @@
 # Autonomous Sprint Policy
 
+**Type**: Operations
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
 **Version**: 2.0
 **Tier**: MANDATORY
-**Category**: Operations
-**Status**: ACTIVE
 **Related**: `autonomous_operation.md` (mode lifecycle), `mode_system.md` (mode system, Markov recommender), `play_time.md` (sibling — time-bounded autonomous play)
 
 **See also**: `maceff-sprint` skill (invocation wrapper for SPRINT) | `play_time.md` (sibling type for time-bounded work) | `maceff-play-time` skill (invocation wrapper for PLAY_TIME)
@@ -29,6 +30,7 @@ A 🏃 SPRINT is a **workload-defined autonomous work session**. The agent execu
 - What does SPRINT mode lock mean for the Markov recommender?
 - What is the agent's posture during a SPRINT?
 - How does the Stop hook behave in SPRINT mode?
+- What do I do while a long-running command (a test suite, a CI wait) runs?
 
 **3 Sprint Task Discipline**
 - How should the scoped task set be defined or curated?
@@ -137,6 +139,7 @@ During a SPRINT:
 - **Do not treat natural pauses as terminal events** — a paused task is not a sprint exit signal
 - **Capture ideas as task notes** (`💡` prefix) rather than creating formal idea CAs
 - **Commit frequently** as you complete each task — do not batch at sprint end
+- **Never block on a long-running command; start it in the background and work ahead.** A test suite, a CI wait, a build or a poll is started with `run_in_background` (or a monitor) and its result is read when it reports. While it runs, take the next ready scoped task, review, draft or note. A foreground wait loop (`sleep` and poll, or a suite run with the sprint's other work standing ready) spends the sprint's time on nothing and leaves the stop gate nagging; the wait is the last thing to do, after the ready work is exhausted, not the first. The operator's words, 2026-11-20: "keep working instead of blocking on long running commands - run them in background and go async and work ahead", and "Especially important on a sprint".
 
 ### 2.3 Stop Hook Behavior
 
@@ -368,6 +371,8 @@ When the user (or the dashboard via `🪂 Ready to jump` at CL0-CL2) signals JUM
 
 **🚨 CRITICAL — Pause is NOT for cycle-spanning work.** Pinned cycle-spanning MISSIONs **keep the gate blocking** — that's the carry-through design. The gate blocking is the framework's mechanism for keeping the agent producing tokens through to natural compaction. JUMP discipline (§3.3.4) says: at the edge, in AUTO_MODE, **generate MORE tokens, not less**. Pausing cycle-spanning items short-circuits the very mechanism designed to handle them.
 
+**Every forced turn has a price** (amended 2026-11-22, BUG #1119). A blocked Stop costs a model turn that re-reads the whole context and is charged against the account's allowance. "More tokens" at the edge means more *work*: a turn that re-runs a check whose answer has not changed is spend without work, and spend is never a goal in itself. In one overnight run a sprint whose every item waited on reviewers forced about 2,800 such turns, a third of the night's allowance.
+
 **Pause is a scalpel for genuine blockers, not an escape for boredom.**
 
 **Acceptable pause justifications** (narrow set):
@@ -381,9 +386,13 @@ When the user (or the dashboard via `🪂 Ready to jump` at CL0-CL2) signals JUM
    - This is NOT the discouraged "cycle-spanning by design" deferral (§3.3.5 still rejects it when concrete work remains in scope) — it is the legitimate end-state where the sprint's deliverables ARE complete and the umbrella is just an open container for future work
    - The sprint should be `task complete`d immediately after pausing the parents
 
+3. **Waiting on compute or on another seat, with ready work exhausted** (amended 2026-11-22, BUG #1119) — a benchmark or build is running, or the next step needs another maintainer's review or the operator's word, and no scoped item has work the agent can do now. This pause is **required**, not merely allowed: holding the gate here produces only forced turns that re-check unchanged state. Name what is awaited in the justification, and unpause when it arrives:
+   - Pause justification: "awaiting <the review / the run / the operator's word on X>; nothing in scope is ready"
+   - Plain `task pause` does not do this: it sets the task to pending and the gate keeps counting it. The verb is `task scope pause`.
+
 **NOT acceptable pause justifications**:
 - "Cycle-spanning by design" → keep gate blocking, do JUMP discipline at edge (§3.3.4) + substrate maintenance (§3.3.7)
-- "I have no autonomous work right now" → pivot to substrate maintenance, NOT pause
+- "I have no autonomous work right now" → pivot to substrate maintenance, NOT pause — unless the reason is that every item awaits compute or another seat, which is case 3 above
 - "Sprint scope is large" → that's by design; the gate keeps you producing through compaction
 - "I want to clear the gate to stop" → exactly the Idle-Loop Shrinking pattern (§5)
 - "Architectural sign-off needed" → if the task is pre-scoped, sign-off is implied; execute and document choices in task notes
@@ -423,6 +432,8 @@ Justification is REQUIRED. It is recorded in:
 - When idle counter < COUNT_INIT (5), the gate's `reason` text includes the count: "Idle-stop counter: 3 of 5 remaining"
 - When idle counter ≤ 2 (critical), the gate emits an explicit Idle-Loop Shrinking warning naming the anti-pattern, the failure modes, and three remedies
 - When fail-open fires, the message is promoted to `systemMessage` (visible to agent, not stderr-only)
+
+**Progress, not activity** (amended 2026-11-22, BUG #1119, #1120). A blocked Stop resets the counter only when a tool call since the previous blocked Stop is new, or returned a new result; re-running an earlier check with the same answer counts as idle. The count lives in the agent's event log (`scope_gate_held`) and starts fresh at the operator's prompt. At fail-open the scope is paused with a churn record, so the following stops pass; `task scope unpause` resumes it. In budget mode `conserve` the failsafe fails open on the first idle Stop.
 
 **Recovery path** when the agent sees the countdown warning:
 1. **Find substantive work** — substrate maintenance is always available (§3.3.7)

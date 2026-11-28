@@ -36,7 +36,7 @@ def _snapshot(cross_refs=True):
         "type": "reflections", "class": "temporal_record", "title": "a reflection",
         "path": "/home/a/agent/private/reflections/2026-02-01_JOTEWR_x.md", "concepts": ["shared"],
         "text": '[LEARNING 2026-01-02 "topic 01"]', "in_web": True, "linked": True}
-    index = "## Cluster A\n" + "\n".join(f"- {_learning(i)}" for i in range(0, N, 4))
+    index = "## Cluster A\n" + "\n".join(f"- `{_learning(i)}`" for i in range(0, N, 4))   # as the learnings CLI writes
     return {"taken_at": "2026-02-02T00:00:00+0000", "nodes": nodes, "learnings_index": index}
 
 
@@ -75,6 +75,52 @@ def test_labels_come_from_cross_references_citations_and_index_clusters(corpus):
     assert cites == {"reflections:2026-02-01_JOTEWR_x": {f"learnings:{_learning(1)[:-3]}"}} and unresolved == 0
     same, _ = ke.same_subject_labels(corpus, corpus.snap["learnings_index"])
     assert len(same) == N // 4 and all(len(v) == N // 4 - 1 for v in same.values())
+
+
+def test_learnings_named_without_the_suffix_still_get_labels():
+    """The learnings CLI names a learning <date>_<time>_<slug>.md, with no _learning suffix. Matching only
+    the suffix left such a corpus with no cross-reference or same-subject labels at all (#1165). A link to a
+    dated artifact of another type is neither a label nor unresolved."""
+    snap = _snapshot()
+    renamed = {}
+    for k, v in snap["nodes"].items():
+        if v["type"] == "learnings":
+            v = dict(v, path=v["path"].replace("_learning.md", ".md"),
+                     text=v["text"].replace("_learning.md", ".md"))
+            k = k.replace("_learning", "")
+        renamed[k] = v
+    renamed["observations:2026-01-03_120000_seen"] = {
+        "type": "observations", "class": "temporal_record", "title": "seen",
+        "path": "/home/a/agent/public/observations/2026-01-03_120000_seen.md", "concepts": [], "text": "x",
+        "in_web": True, "linked": True}
+    first = next(k for k in renamed if k.startswith("learnings:"))
+    renamed[first]["text"] += "- `2026-01-03_120000_seen.md`\n- `2026-01-04_120000_gone.md`\n"
+    snap["nodes"] = renamed
+    snap["learnings_index"] = snap["learnings_index"].replace("_learning.md", ".md")
+    corpus = ke.Corpus(snap, "e" * 64)
+    xref, unresolved = ke.xref_labels(corpus)
+    assert len(xref) == N
+    assert unresolved == 1, "only the name that matches no node is unresolved, not the observation"
+    same, _ = ke.same_subject_labels(corpus, snap["learnings_index"])
+    assert len(same) == N // 4
+
+
+def test_same_subject_clusters_are_the_ones_the_learnings_cli_reads():
+    """A structural heading such as a CEP navigation guide is a reading list, not a cluster, and counted as
+    one it added hundreds of spurious pairs (Ira's review of #1166). A cluster heading counts with or without
+    the "(N)" the CLI writes."""
+    snap = _snapshot()
+    a = [_learning(i) for i in range(0, N, 4)]
+    b = [_learning(i) for i in range(1, N, 4)]
+    snap["learnings_index"] = ("## CEP Navigation Guide\n" + "\n".join(f"- `{f}`" for f in a + b) + "\n"
+                               "## Cluster A\n" + "\n".join(f"- `{f}` - when a" for f in a) + "\n"
+                               f"## Cluster B ({len(b)})\n" + "\n".join(f"- `{f}` - when b" for f in b) + "\n")
+    corpus = ke.Corpus(snap, "d" * 64)
+    same, unresolved = ke.same_subject_labels(corpus, snap["learnings_index"])
+    key = lambda f: f"learnings:{f[:-3]}"
+    assert same[key(a[0])] == {key(f) for f in a[1:]}, "the navigation guide joined a to b"
+    assert same[key(b[0])] == {key(f) for f in b[1:]}, "a cluster heading with a count was not read"
+    assert unresolved == 0
 
 
 def test_the_split_is_stable_and_a_query_keeps_its_side_as_the_corpus_grows():
@@ -210,3 +256,31 @@ def test_held_runs_go_through_the_real_event_log_and_a_failed_append_refuses(cor
     monkeypatch.setattr(agent_events_log, "append_event", lambda *a, **k: False)
     with pytest.raises(ke.EvalRefused, match="could not record knowledge_eval_held_run"):
         ke.evaluate(corpus, ["idf"], sources=["xref"], which="held", boot=10)
+
+
+def test_an_orphan_artifact_is_not_a_query_and_the_chart_says_how_many_were_left_out(log):
+    """An artifact outside the web can't be a --like query, so it can't raise from one (#1059); it
+    is left out of the queries and counted."""
+    snap = _snapshot()
+    orphans = [k for k in list(snap["nodes"])[:3]]
+    for k in orphans:
+        snap["nodes"][k]["in_web"] = False
+    out = ke.evaluate(ke.Corpus(snap, "f" * 64), ["random", "like"], sources=["xref"], **log.kw(), boot=50)
+    info = out["chart"]["sources"]["xref"]
+    assert info["orphan_queries"] == len(orphans)
+    assert "outside the web" in ke.format_report(out)
+
+
+def test_an_orphan_target_is_not_counted_as_a_miss_and_a_query_with_only_orphan_targets_is_left_out(log):
+    """The ranked list is cut to the web, so a target outside it can never be returned (THM's review of
+    #1061). Counted against every ranker it would pull recall down for nobody's fault."""
+    snap = _snapshot()
+    names = list(snap["nodes"])
+    # learning i cross-references learning i+4, so making 4 an orphan makes it the only target of 0
+    snap["nodes"][names[4]]["in_web"] = False
+    out = ke.evaluate(ke.Corpus(snap, "f" * 64), ["random", "idf"], sources=["xref"], **log.kw(), boot=50)
+    info = out["chart"]["sources"]["xref"]
+    assert info["orphan_queries"] == 1                       # learning 4 as a query
+    assert info["orphan_targets"] >= 1 and info["no_target_queries"] >= 1
+    report = ke.format_report(out)
+    assert "targets left out" in report and "no target in the web" in report

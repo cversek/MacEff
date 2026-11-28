@@ -90,7 +90,7 @@ def _owned(path) -> bool:
         return False
 
 
-def plan_attach(response: Optional[dict], session_unit: str, *,
+def _plan_attach(response: Optional[dict], session_unit: str, *,
                 read_info: Optional[Callable] = None,
                 verify: Optional[Callable] = None,
                 ancestors: Callable[[int], List[int]] = _ancestors,
@@ -111,6 +111,9 @@ def plan_attach(response: Optional[dict], session_unit: str, *,
     if status is None:
         return AttachPlan(NONE, reason=why)
     state = status.get("state")
+    # A session that can't log in waits on a person and is kept running (MIS-0002-R19), and
+    # attaching to it to run /login is the one way back (persistent_layer 3.2). Waiting on a
+    # person is a live state, so this check already lets it through; plan_attach names the remedy.
     if state not in _LIVE:
         return AttachPlan(NONE, reason=f"the session unit is {state}; no session runs")
     pid = status.get("pid")
@@ -155,6 +158,24 @@ def plan_attach(response: Optional[dict], session_unit: str, *,
                                    f"not hosted by the client's daemon and not under tmux")
 
 
+
+def plan_attach(response: Optional[dict], session_unit: str, **probes) -> AttachPlan:
+    """Decide how to attach to ``session_unit`` from the daemon's status ``response``.
+
+    A session waiting on its login (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person)) still
+    runs, and attaching to run ``/login`` in it is the way back, so its plan says so
+    (persistent_layer 3.2, MacEff #1015). Everything else is as ``_plan_attach`` decides.
+    """
+    plan = _plan_attach(response, session_unit, **probes)
+    status, _ = _session_unit(response, session_unit)
+    from macf.pd.interface import AUTH_REMEDY  # here, not at the top: the CLI parser must build light
+    kind = status.get("waiting_on") if status else None
+    login = (status.get("auth_failed") or "authentication failed") if kind in AUTH_REMEDY else None
+    if login and plan.kind != NONE:
+        return AttachPlan(plan.kind, plan.argv,
+                          reason=f"the session can't authenticate ({login}): {AUTH_REMEDY[kind]}; {plan.reason}")
+    return plan
+
 def readout_line(plan: AttachPlan) -> str:
     """The readout's line for attach (R101): how, or that nothing attachable hosts it."""
     if plan.kind == NONE:
@@ -172,7 +193,7 @@ def plan_attach_for_home(home, *, read_only: bool = False, control: bool = False
     declaration (the one unit of kind ``session``); the daemon's status says which process
     that unit is (R100). None means the agent declares no session unit, so any session it
     has is the legacy harness's; a declared one that can't be resolved is a plan of kind
-    ``none`` with the reason, never a guess by name (persistent_layer 4.1).
+    ``none`` with the reason, never a guess by name (persistent_layer 9.1).
     """
     from ..pd.client import DaemonUnavailable
     from ..pd.core import DeclarationRefused

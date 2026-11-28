@@ -76,7 +76,7 @@ SETTLED = (EVENT_DELIVERED, EVENT_SILENCED, EVENT_WITHDRAWN)
 #: (MIS-0002-R42).
 INTERNAL_SOURCES = frozenset({"pd_limit_exceeded", "pd_unread_mail", "pd_carried", "pd_run_failed",
                               "pd_run_missed", "pd_schedule_changed", "pd_grant_denied", "pd_entry_due", "pd_duty_due",
-                              "pd_unit_failed"})
+                              "pd_unit_failed", "pd_login_expiring"})
 #: What each boot still owes, after reading back: the checkpoint the next boot reads back to
 #: (MIS-0002-R41). Its data lists each owed notice's source, arrival id, count and read time.
 EVENT_NOTICES_OWED = "pd_notices_owed"
@@ -399,7 +399,7 @@ class Notifier:
             self.on_detach(conn)
         try:
             conn.close()
-        except OSError:
+        except OSError:  # noqa: S110 - closing a socket that already failed; nothing is lost, and the channel was detached above
             pass  # noqa: MACEFF003 - closing a socket that already failed; nothing is lost
 
     @property
@@ -407,7 +407,7 @@ class Notifier:
         return list(self._channels)
 
     def pace(self, refractory_s: float) -> None:
-        """Set how long the keystroke wake rests after each wake (persistent_layer 1.9). The daemon
+        """Set how long the keystroke wake rests after each wake (persistent_layer 6.9). The daemon
         has already checked the floor and recorded the pace; a window running now is measured
         against the new length at the next tick."""
         if self.waker is not None:

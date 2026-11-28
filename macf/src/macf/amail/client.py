@@ -16,11 +16,15 @@ import json
 import os
 import socket
 import stat
+import time
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from .models import Message, _now_iso
+
+if TYPE_CHECKING:
+    from .registry import Registry
 
 
 class BrokerUnavailable(RuntimeError):
@@ -46,8 +50,11 @@ def _roundtrip(req: Dict[str, Any], socket_path: Path, timeout: float,
             f"cannot reach the amail broker at {path}: {e}. "
             "Mail is not sent. There is no fallback transport by design."
         ) from e
+    from .socket_protocol import VERSION
     try:
-        payload = json.dumps(req) + "\n"
+        # Every request names the protocol it speaks (MIS-0004 R35), so a broker on another build
+        # refuses it with the versions it does speak instead of misreading it.
+        payload = json.dumps({"v": VERSION, **req}) + "\n"
         try:
             s.sendall(payload.encode("utf-8"))
             buf = b""
@@ -69,7 +76,11 @@ def _roundtrip(req: Dict[str, Any], socket_path: Path, timeout: float,
         s.close()
     if not buf.strip():
         raise BrokerUnavailable("broker closed the connection without answering")
-    return json.loads(buf.decode("utf-8"))
+    reply = json.loads(buf.decode("utf-8"))
+    if isinstance(reply, dict) and reply.get("deprecated"):
+        # Served, but on borrowed time (MIS-0004 R35): say so where the agent will see it.
+        print(f"⚠️ MACF: amail: {reply['deprecated']}", file=sys.stderr)
+    return reply
 
 
 def submit(sender: str, message: Message, socket_path: Path,
@@ -272,8 +283,90 @@ def _ingest_lock(home: Path, wait: bool) -> int:
     return fd
 
 
+#: The file in a pickup box naming the one store that ingests it (#872). Every reader of the box takes only
+#: ``*.amsg`` and ``*.eml`` (ingest, the broker's counts and its aged-entry alarm), so a dotfile is no entry.
+INGEST_CLAIM = ".ingest.claim"
+#: An empty claim older than this was left by a write that never finished; younger, it is being written.
+EMPTY_CLAIM_STALE_S = 60.0
+
+
+class BoxClaimed(Exception):
+    """Another store claims this pickup box; ingesting it here would split one agent's mail across two."""
+
+
+def _claim_holder(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
+
+
+def box_claim_conflict(home: Path, pickup_box: Path) -> Optional[str]:
+    """Why *home*'s store must not ingest *pickup_box*, or None when no other store claims it."""
+    mine = str(Path(home).resolve())
+    path = Path(pickup_box) / INGEST_CLAIM
+    holder = _claim_holder(path)
+    if not holder or holder == mine:
+        return None
+    return (f"the pickup box {pickup_box} is claimed by the store under {holder}, not {mine}: two stores "
+            f"ingesting one box would split this agent's mail between them (a copied amail settings file "
+            f"does this), so this one doesn't. If {holder} no longer ingests it, remove {path}")
+
+
+def _refuse_an_empty_claim(path: Path) -> None:
+    """An empty claim is one being written (the exclusive-create fallback writes after it creates), so
+    this pass waits (IngestBusy); one empty for over a minute was never finished, and is refused by name."""
+    if _claim_holder(path):
+        return
+    try:
+        age = time.time() - path.stat().st_mtime
+    except FileNotFoundError:
+        return  # noqa: MACEFF003 - removed since it was seen; the next pass claims afresh
+    if age > EMPTY_CLAIM_STALE_S:
+        raise BoxClaimed(f"the pickup box's claim {path} has been empty for {int(age)} s, so no store holds "
+                         f"it: a claim that was never finished. Remove it and the next ingest claims the box")
+    raise IngestBusy(f"the pickup box's claim {path} is being written; ingest waits for the next pass")
+
+
+def _claim_box(home: Path, pickup_box: Path) -> None:
+    """Claim the box for *home*'s store unless one already does, or raise BoxClaimed.
+
+    The claim is written whole under another name and linked into place, so a reader never sees it half
+    written and two first ingests can't both win: ``link`` fails when the name exists."""
+    said = box_claim_conflict(home, pickup_box)
+    if said:
+        raise BoxClaimed(said)
+    path = Path(pickup_box) / INGEST_CLAIM
+    if path.exists():
+        _refuse_an_empty_claim(path)
+        return
+    temp = path.with_name(f"{INGEST_CLAIM}.{os.getpid()}")
+    temp.write_text(str(Path(home).resolve()) + "\n", encoding="utf-8")
+    try:
+        os.link(temp, path)
+    except FileExistsError:  # noqa: S110 - another first ingest won the race; the check below reads its claim
+        pass
+    except OSError:
+        # A filesystem with no hard links: an exclusive create still lets only one store win, though a
+        # reader may meet the claim before its line is written, which reads as no claim yet (#872 review).
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o640)
+        except FileExistsError:  # noqa: S110 - another store created it first; the check below reads it
+            pass
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(str(Path(home).resolve()) + "\n")
+    finally:
+        temp.unlink(missing_ok=True)
+    said = box_claim_conflict(home, pickup_box)
+    if said:
+        raise BoxClaimed(said)
+    _refuse_an_empty_claim(path)
+
+
 def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
-           agent: str = "", *, wait: bool = True) -> list:
+           agent: str = "", *, wait: bool = True, domain: str = "",
+           registry: Optional[Registry] = None) -> list:
     """Execute the custody transfer: move handed-off mail from the broker's
     pickup box into the caller's OWN store, as the caller.
 
@@ -293,19 +386,29 @@ def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
     One ingest at a time per store (``_ingest_lock``). With ``wait`` false a
     held lock raises IngestBusy instead of waiting, for a caller that will
     simply try again on its next pass.
+
+    An agent message's signature is judged against the operator's registry
+    (MIS-0004 R44), *registry* or the host's own, at the acceptance time the
+    box's broker recorded when *domain* names it. *contacts_path* no longer
+    verifies anything: keys an agent's contacts declare are not the
+    operator's declaration (R42).
     """
     results = []
     if not pickup_box.is_dir():
         return results
+    if registry is None:
+        from .registry import Registry, registry_path
+        registry = Registry(registry_path())
     lock = _ingest_lock(home, wait)
     try:
-        return _ingest_locked(home, pickup_box, contacts_path, agent)
+        _claim_box(home, pickup_box)     # one store per box (#872): raises BoxClaimed for any other
+        return _ingest_locked(home, pickup_box, contacts_path, agent, domain, registry)
     finally:
         os.close(lock)
 
 
 def _ingest_locked(home: Path, pickup_box: Path, contacts_path: Optional[Path],
-                   agent: str) -> list:
+                   agent: str, domain: str = "", registry: Optional[Registry] = None) -> list:
     results = []
     try:
         box_fd = os.open(pickup_box, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -320,7 +423,8 @@ def _ingest_locked(home: Path, pickup_box: Path, contacts_path: Optional[Path],
         bundles = sorted(pickup_box.glob("*.amsg"))
         held = _held_bundle_ids(home) if bundles else {}
         for amsg in bundles:
-            results.append(_ingest_bundle(home, amsg, contacts_path, agent, box_fd, broker_uid, held))
+            results.append(_ingest_bundle(home, amsg, contacts_path, agent, box_fd, broker_uid, held,
+                                          domain=domain, registry=registry))
         for eml in sorted(pickup_box.glob("*.eml")):
             results.append(_ingest_eml(home, eml, box_fd, broker_uid))
     finally:
@@ -342,7 +446,7 @@ def _held_bundle_ids(home: Path) -> Dict[str, Path]:
     for p in store.bundle_sidecars_for(home).glob("*.json"):
         try:
             mid = json.loads(p.read_text()).get("message_id")
-        except (OSError, ValueError):
+        except (OSError, ValueError):  # noqa: S112 - read_bundle_sidecar reports bad sidecars; ids only
             continue  # noqa: MACEFF003 - an unreadable sidecar names no id; read_bundle_sidecar reports it
         if mid:
             held[mid] = p
@@ -405,7 +509,7 @@ def _set_aside(box_fd: int, names, reason: str) -> None:
     for name in names:
         try:
             os.rename(name, name + ".refused", src_dir_fd=box_fd, dst_dir_fd=box_fd)
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S112 - the entry already gone; the refusal is reported below
             continue
     print(f"⚠️ MACF: pickup entry {names[0]} refused and set aside as .refused: {reason}", file=sys.stderr)
 
@@ -468,24 +572,24 @@ def _ingest_eml(home: Path, eml: Path, box_fd: int, broker_uid: int) -> dict:
 
 
 def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: int,
-                   broker_uid: int, held: Optional[Dict[str, Path]] = None) -> dict:
+                   broker_uid: int, held: Optional[Dict[str, Path]] = None, *,
+                   domain: str = "", registry: Optional[Registry] = None) -> dict:
     """Custody transfer for an agent message, including the signature verdict.
 
     VERIFICATION HAPPENS HERE, not at read time, for three reasons the battery
     made concrete. Read-time verification lives on the path the suite never
     exercises — the same path that hid a phantom listing and a thread id minted
     from the clock. Ingest is exercised. Second, it must keep working with the
-    broker stopped, so the keys come from the contacts file on disk, read
-    directly, never a broker round-trip: the file is broker-OWNED and
-    agent-readable, so an agent can read the keys it has been given and cannot
-    rewrite them. Third, custody transfers once, so the trust fact is
+    broker stopped, so the keys come from the operator's registry on disk, read
+    directly, never a broker round-trip (MIS-0004 R44): root's file, which no
+    agent can rewrite. Third, custody transfers once, so the trust fact is
     established at the boundary and recorded, rather than recomputed on every
     glance.
 
     The verdict never collapses to a boolean. A declared key can change, so the
     raw message and its signature are preserved and re-verification stays
-    possible; and keys_for()'s three states stay distinct, because "no key
-    declared" is not "declared and failed" is not "verified".
+    possible; and the verdict's three states stay distinct, because "not in the
+    registry" is not "registered and failed" is not "verified".
     """
     import hashlib
     from . import store
@@ -539,7 +643,7 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: in
         entry.update(ingested=False, duplicate=True, reason=reason)
         return entry
 
-    verdict = _verify_at_ingest(message, contacts_path, agent)
+    verdict = _verify_at_ingest(message, meta, domain, registry)
     message.trust = verdict["trust"]
     meta["ingest_verification"] = verdict
     # Disagreement with the broker's own read is information, not noise: it is
@@ -563,40 +667,33 @@ def _ingest_bundle(home: Path, amsg: Path, contacts_path, agent: str, box_fd: in
     return entry
 
 
-def _verify_at_ingest(message, contacts_path, agent: str) -> dict:
-    """The recipient's own signature verdict. Three states, never flattened."""
+def _verify_at_ingest(message, meta: Dict[str, Any], own_domain: str,
+                      registry: Optional[Registry]) -> dict:
+    """The recipient's own signature verdict, against the operator's registry (MIS-0004 R44).
+    Three states, never flattened.
+
+    A sender the registry declares is held to its keys: unsigned, or signed with no key valid for
+    it, is suspect. A sender it doesn't declare is outside mail and stays unverified, and so does
+    everything while the registry can't be read or trusted, so mail turns suspect only once the
+    operator has declared its sender (landing declares first and enforces second, section 12.4).
+    Nothing falls back to keys an agent's own contacts declare.
+
+    The sender's card and the acceptance time are this box's broker's word: its ``sender_card``,
+    resolved once from the sender's address, and its ``handed_off_at`` (R45), taken from a sidecar
+    the caller has already read through the box's descriptor as the broker's own file and checked
+    against the payload's hash, and only when it names this very message. With no card the
+    sender is unverified; with no acceptance time, only keys that may sign now count."""
+    from .attest import acceptance_time, sender_verdict
     from .trust import TrustClass
-    from .crypto import verify
 
-    if not contacts_path or not agent:
+    if registry is None:
         return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": None,
-                "reason": "no local contact book available to this recipient; "
-                          "no verification attempted"}
-    try:
-        from .contacts import ContactBook
-        keys = ContactBook(Path(contacts_path)).keys_for(agent, message.sender)
-    except (OSError, ValueError) as e:
-        return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": None,
-                "reason": f"contact book unreadable ({e}); no verification attempted"}
-
-    if message.signature and keys:
-        if verify(message, message.signature, keys):
-            return {"trust": TrustClass.ATTESTED.value, "keys_declared": len(keys),
-                    "reason": "signature verified against a declared key"}
-        return {"trust": TrustClass.SUSPECT.value, "keys_declared": len(keys),
-                "reason": "signature present and did NOT verify against any "
-                          "declared key"}
-    if message.signature and not keys:
-        return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": 0,
-                "reason": "signed, but this recipient declares no key for the "
-                          "sender; nothing can be concluded"}
-    if keys and not message.signature:
-        return {"trust": TrustClass.SUSPECT.value, "keys_declared": len(keys),
-                "reason": "sender declares a key and sent no signature; "
-                          "breaking that commitment is the shape of impersonation"}
-    return {"trust": TrustClass.UNVERIFIED.value, "keys_declared": 0,
-            "reason": "unsigned, and no key declared for the sender"}
-
+                "reason": "no operator's registry given; no verification attempted"}
+    if meta.get("message_id") != message.message_id:
+        return sender_verdict(message, None, registry, None)
+    card = meta.get("sender_card") if isinstance(meta.get("sender_card"), str) else None
+    accepted_at = acceptance_time(meta, own_domain) if own_domain else None
+    return sender_verdict(message, card, registry, accepted_at)
 
 
 def read_sent(home: Path) -> list:
@@ -716,9 +813,42 @@ def read_delivered_internet(home: Path, ref: str):
     return store.find_internet(home, ref)
 
 
-def status(socket_path: Path, timeout: float = 10.0) -> Dict[str, Any]:
+def status(socket_path: Path, timeout: float = 10.0,
+           sender: Optional[str] = None) -> Dict[str, Any]:
     """The caller's mailbox counts, including the one it cannot compute
     itself: quarantined mail lives where the refused party cannot edit it,
-    so its count only exists on the far side of the socket."""
-    return _roundtrip({"op": "status"}, socket_path, timeout,
-                      "No status was returned.")
+    so its count only exists on the far side of the socket.
+
+    `sender` is the agent's claim, as `submit` sends it. On a uid the host
+    tier declares shared, the broker cannot tell whose counts to answer
+    without it (amail.md §1.3); on any other uid the kernel's answer stands
+    and a disagreeing claim is refused."""
+    req: Dict[str, Any] = {"op": "status"}
+    if sender:
+        req["sender"] = sender
+    return _roundtrip(req, socket_path, timeout, "No status was returned.")
+
+
+def contacts(socket_path: Path, timeout: float = 10.0,
+             sender: Optional[str] = None) -> Dict[str, Any]:
+    """The correspondents the broker checks for the caller: address and direction each.
+
+    The broker answers, not the contact file, which an agent can't read from its side by design;
+    so the list is what is enforced now. `sender` is the claim, as for `status`. An older broker
+    refuses the operation by name, and `_roundtrip` raises that refusal as it does any other."""
+    req: Dict[str, Any] = {"op": "contacts"}
+    if sender:
+        req["sender"] = sender
+    return _roundtrip(req, socket_path, timeout, "No contact list was returned.")
+
+
+def message_state(message_id: str, socket_path: Path, timeout: float = 10.0,
+                  sender: Optional[str] = None) -> Dict[str, Any]:
+    """The broker's answer for one message this agent sent: each recipient's latest receipt state
+    and the message-level view (MIS-0004 R24). `found` is false for an id the broker holds no
+    record of for this agent, which includes another agent's message. The same record stays
+    readable without a broker through `sent_disposition`."""
+    req: Dict[str, Any] = {"op": "state", "message_id": message_id}
+    if sender:
+        req["sender"] = sender
+    return _roundtrip(req, socket_path, timeout, "No state was returned.")

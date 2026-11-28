@@ -3,6 +3,9 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.18.0 — §3.2.3: the broker refuses a declared agent's submission that is unsigned or carries no signature valid for a declared key at its acceptance (MIS-0004 R43), with the verdict's reason; an undeclared sender, and every sender while the registry can't be trusted, still passes as unverified. Minor: a refusal a declared agent can meet.
+**Version**: 1.17.0 — §6b.2: a sender can also ask the broker for a message's latest state by its id, `amail state <id>`, answered from the same disposition record and scoped to the caller (MIS-0004 R24). §3.2: every request on the broker socket carries a protocol version `v`, every reply names the version that answered, and a superseded version is served through a declared last day, then refused by name (R35). Minor: a new verb, and a new refusal a client on another build can meet.
+**Version**: 1.16.0 — §3.2.3: every agent message is judged against the operator's registry (MIS-0004 R44), by the broker and the recipient with one rule, card and time: the broker resolves the sender's card and writes it with its acceptance time into the hand-off sidecar. A declared sender's unsigned or failed signature is suspect; any other sender is unverified; contact books no longer verify. Minor for operators: a declared agent's verdicts change, and a receiver's amail settings may name `domain`.
 **Version**: 1.15.0 — §3.2.3: the operator's registry. Each MacEff agent's public key is declared with its account in a root-owned file only the operator can write, which also records each certificate his authority issues by name, serial and expiry; anything else can write it and it is refused when read (MIS-0004 R42). `amail registry check` reports it.
 **Version**: 1.14.0 — §3.4: the broker's health is its last sweep (MIS-0004 R31). A deployment names the schedule that runs the inbound `sweep` in its declaration's `mail_sweep_schedule`; the broker is healthy only when that sweep's last run ended ok, and the outside watch alerts as `mail-broker: SWEEP-FAILED` when it failed, is overdue, or never ran, so stuck mail reaches a person (R32). Minor: a new declaration field and a new alert an operator can meet.
 **Version**: 1.13.0 — the spool consumer: an entry that fails unexpectedly is counted and the run goes on; after `max_failures` (default 3) it is quarantined with its last error and audited (MIS-0004 R17, R20). Minor: an outcome an operator can meet in the quarantine.
@@ -82,6 +85,9 @@ becomes tractable once the address stops encoding how the message travels.
 - Two brokers share a filesystem (a host and a container on it): which rung, and where does the write land?
 - How is locality visible to a broker when the address must not record it?
 - What must a deployment declare to reach a peer through a shared filesystem, and who provisions what?
+- What is rung 2, and how does a peer over a private network acknowledge custody?
+- What are the commands that set up a link, in what order, and which steps stay the operator's?
+- How do I tell why a link doesn't work, or why mail reads unverified?
 - How does delivery actually complete, and who performs the final write?
 - What must a deployment provision before mail can be delivered at all?
 - Where is the authoritative mail store?
@@ -119,6 +125,8 @@ becomes tractable once the address stops encoding how the message travels.
 - Can I see the rate limit before I hit it, and where?
 - Why is a multi-recipient message refused whole rather than sent to the permitted part?
 - How does the broker know who I am, and why can I not simply claim a sender?
+- My client is on a different build from the broker. What happens to my requests, and how
+  is the socket's protocol changed without stranding older clients?
 - Why is there a rate limit, and whose asset is it protecting?
 - Who writes the sender's copy of a message, and why is it never the broker?
 - Why does my sent copy carry a different id from the one `send` reported, and which
@@ -127,6 +135,8 @@ becomes tractable once the address stops encoding how the message travels.
   fact live?
 - Why is a disposition recorded as a history rather than a last value, and what must an
   UNRECORDED disposition read as?
+- How do I ask the broker where one message I sent stopped, and what does it answer for
+  someone else's message?
 - Why is a store with a reader and no writer a defect rather than a stub?
 - What input must a pre-send gate accept, and what does passing it actually mean?
 - Is the pre-send gate scoped by who composed a message or by where it is going, and what
@@ -234,7 +244,7 @@ cheapest rung that can reach the recipient:
 |---|---|---|
 | 1 | Recipient's mailbox is on this host | Hand-off into the recipient's pickup box (§2.3) |
 | 1s | Recipient's broker shares a filesystem with this one | Broker-to-broker hand-off into the peer broker's intake on that filesystem (§2.1.1) |
-| 2 | Recipient's broker is reachable on a private network | Broker-to-broker transfer over that network |
+| 2 | Recipient's broker is reachable on a private network | Broker-to-broker transfer over that network (§2.1.2) |
 | 3 | Anything else | Hand to the configured outbound relay |
 
 Rung selection is **runtime state**, evaluated per message. It is never recorded in
@@ -261,8 +271,8 @@ thing that *should* change; contacts, stored mail and the message format do not.
 
 **Where the write lands, and why it is not the pickup box.** The pickup box is
 the boundary between an agent and **its own** broker. The broker that writes
-there has consulted the recipient's contact book, classified the message with the
-recipient's keys, and vouched for both in the sidecar — and a broker on the other
+there has consulted the recipient's contact book, classified the message against
+the operator's registry, and vouched for both in the sidecar — and a broker on the other
 side of a mount can do none of that, because it cannot read the peer's book. A
 pair it wrote into the box would carry an authorization claim nobody made, and
 moving the recipient-side check to ingest would put an authorization predicate in
@@ -324,6 +334,85 @@ The consequence worth stating plainly: adding a second host, moving an agent bet
 hosts, or gaining and losing a private network changes **nothing** about addressing,
 contact lists, or stored messages. Only the broker's rung choice changes.
 
+### 2.1.2 Rung 2: a peer broker over a private network
+
+A broker declares each peer by its mail domain, with the peer's private address and port, in
+the operator-written broker configuration (`peer_links`), and declares the one private address it
+listens on (`peer_listen`). It sends a message to a peer by connecting to the peer's listener and
+keeping the message until the peer acknowledges. The acknowledgement is the peer's report that the
+message is durably in its own intake (MIS-0004 R58, R60); a peer that is down, slow or cannot store
+it leaves the message in the sender's outbox, and the next sweep tries again (R61). A peer that
+refuses it is a refusal, recorded as one.
+
+The listener binds only the declared address, never every interface, and closes a connection from an
+address no declared peer holds before it reads from it (R58, R59). It reads a request only up to a
+bound, and only for a deadline (R62, R65). It writes what it takes into its own peer intake, `<handoff>/_peers/<peer domain>/`, and
+that intake is swept as a rung 1s intake is: the receiver's contacts, keys, quarantine, audit and
+hand-off decide what reaches an agent (R63, R64), so a connection says which machine sent a message
+and only the signature says which agent. A peer link also declares the peer's agents (`agents`: the address local part to the agent's calling card), which is how the receiving broker knows which card a sender's address names and so which registry key its signature is judged against; a peer that declares none has all its mail read unverified. A peer's domain is reached by one rung: declaring it in both
+`shared_handoffs` and `peer_links` is refused. Internet mail is never sent over this link (R53).
+
+### 2.1.3 Setting up a link, in order
+
+Every step reads the operator's files through the loader the broker runs on, shows what it would
+change before changing it, and is a no-op when the change is already made. The registry, the service
+manager and anything else root's are printed for the operator, never run.
+
+1. **`macf_tools agent init`.** For an agent with an address (`.maceff/amail.json`), its mail step makes
+   the signing key if there is none, declares signing every message, and on a host writes the broker's
+   own daemon (step 5). It prints the registry line for the agent's key.
+2. **`macf_tools amail peer card`, on each side.** The card is what the other operator needs: the mail
+   domain, the declared listener's address and port, and each agent's calling card, public key and
+   account, with each key's fingerprint, as one line of JSON. It carries no secret. A key on a card is a
+   claim (6b.5) until the two operators compare its fingerprint on another channel. A broker with no
+   `peer_listen` has no card, and an agent with no `card` in the addressing file can't be on one, since
+   a peer judges its signatures by its card.
+3. **`macf_tools amail peer add '<the other side's card>'`, on each side.** Writes the link with its
+   agents map into `peer_links`, and a contact for each local agent named (`--for`, default the agent
+   running it). The operator's two files are edited one entry at a time, so comments and every other
+   line stay, and an edit whose parsed result is anything but the old data with that one entry changed
+   is refused. A card the broker would refuse to start on (its own domain, a domain already shared, a
+   public address) is refused before anything is written. Each old file is kept beside the new one, and
+   a link's note survives a new card. It prints the other side's registry lines.
+4. **The registry declarations, by each operator, one at a time**, once the fingerprint is confirmed:
+   each `macf_tools amail registry declare ...` stages its change and prints the root step that installs
+   it; run that step and `macf_tools amail registry check` before the next, since a second declaration
+   staged before the first is installed replaces it. Then restart each broker so it reads its new config.
+5. **`macf_tools amail broker-unit`, on a host.** The broker as a declared unit of a primal daemon of its
+   own (7.5), replacing a launchd job that ran it directly. The install, `MACEFF_AGENT_HOME_DIR=<home>
+   macf_tools pd install`, is the operator's. Where a daemon already declares the broker, an agent's own
+   included, it refuses and names that daemon: one broker per system (MIS-0004 R01). On macOS this is a
+   per-user job: a peer on the LAN may need the Local Network grant for its listener, and the link stops
+   while the operator is logged out. The listener is a crossing of the system's boundary; MIS-0007
+   (a draft, #855) proposes a door for such crossings, and how a rung-2 link would use one is still open.
+6. **`macf_tools amail peer check <domain>`.** The link station by station, in the order a message
+   meets them: the declaration here, this side's agents map and registry keys for the peer, the peer's
+   listener, the address the peer knows this host by, its build, and the cards and keys the peer declares
+   for this broker's agents. A message reads attested at the receiver exactly when its sender's card is
+   declared there and that card's key is in the receiver's registry (R44, R63), so those stations predict
+   attestation before any mail is sent; `--send` sends one signed test message and passes only on the
+   peer's acknowledgement. The first failing station names its fix. The remote stations use a `ping`
+   request a listener answers only to a declared peer; a peer whose build has none reads as an older build.
+   A ping discloses, to that peer only, the receiver's domain, the domain it sees at the caller's address,
+   its macf build and protocol, the cards it declares for the caller's agents, and whether its registry
+   holds a key for each; nothing beyond what the two cards already exchanged, except the build.
+
+After that, `macf_tools amail status` lists the setup piece by piece with the fix for anything missing
+(the address, the key, signing, the registry, how the broker is supervised, the listener as a declared
+crossing, each peer with the mail waiting for it and refused by it); `macf_tools amail outbox` lists
+that mail, the refused with the peer's reason, by default only the asking agent's own; `macf_tools amail
+inbox` is the unread mail, newest first, with its trust marks.
+
+**Example.** Two hosts, `alpha.example` and `beta.example`, on one tailnet. Each operator runs
+`peer card` and sends the line to the other; each runs `peer add` with the line received, then the two
+registry declarations it printed one at a time after comparing fingerprints, then restarts the broker. `peer check
+beta.example` on alpha then passes every station, and `peer check beta.example --send` puts one
+attested message in the recipient's box.
+
+**What goes wrong without it** is what the first link met by hand: a link that declared no agents, so
+nothing could read attested; a key missing from one registry; a broker running code older than its
+config. Each is now a named station of `peer check`, or a line of `amail status`.
+
 ### 2.2 Local delivery is an optimization, not a special case
 
 Rung 1 exists because same-host delivery is faster, more private, and cannot fail
@@ -373,6 +462,21 @@ written, and raises a notice when either can't (MIS-0002-R65): on macOS the daem
 privacy grants are not the terminal's, and a container's daemon whose supplementary groups
 were cleared loses a box it reached through one, so the box's group should be the agent's
 primary group. Neither failure may read as an empty box.
+
+**One store ingests a box** (#872). A settings file copied into a second agent's home names
+the same box, and each store's lock is its own, so two stores would share one agent's mail
+between them with nothing said. The first ingest writes its store's home, resolved, into
+`.ingest.claim` in the box: written whole and linked into place, or, on a filesystem with no
+hard links, created exclusively; either way two first ingests can't both win. An ingest from any
+other store is refused, naming both homes and the file. An empty claim is one being written, so
+that pass waits for the next; one left empty for over a minute was never finished and is refused
+by name, with the file to remove. The
+receiver treats that refusal as a box it can't use: one notice (MIS-0002-R65), the slow
+re-check, and no clearing while the claim stands; `amail list` says so and lists what its
+store holds. Every reader of the box takes only `*.amsg` and `*.eml`, so the claim is no
+entry and no aged one. When the claiming store no longer ingests the box (a home moved or
+retired), the operator removes the file; where provisioning makes boxes, it may write the
+claim for the seat's own store at the start.
 
 **Why this is a policy statement and not an implementation note.** The obvious
 design has the broker write each recipient's mailbox directly. That requires a
@@ -586,6 +690,16 @@ Refusals are returned to the agent as errors. An agent MUST be able to tell that
 message was refused, and why — silent discard trains agents to believe mail was
 delivered.
 
+**The socket carries a protocol version** (MIS-0004 R35). One broker serves seats on
+different builds of macf, so every request names the version it speaks in `v`, and
+every reply, refusals included, names the version that answered. A request with no `v`
+is version 1, which is what every client before the field spoke. A version the broker
+doesn't speak is refused with the versions it does, and nothing in the request is run.
+When the protocol changes, the old version is listed in `macf.amail.socket_protocol`
+with the last day it is still accepted, in the same pull request as the change. Until
+then it is served with a `deprecated` note naming that day, and after it, refused by
+name. An addition an old client never sends, such as a new operation, isn't a change.
+
 ### 3.2.1 Two rules about the credential that were learned by measuring
 
 **Authorization completes before the credential is touched.** The broker MUST finish
@@ -643,8 +757,10 @@ means something to a party that doesn't trust the broker.
   It never prints the private key.
 - **The declare step.** An agent whose configuration sets `signing_required` refuses
   to send without a usable key. Any other agent without a key sends unsigned and is
-  told on stderr. Receivers classify mail exactly as before; refusing unsigned agent
-  mail (R43) and marking it suspect (R44) switch on only once every key is declared.
+  told on stderr. Until the operator declares an agent's key, its mail is unverified at
+  every receiver, never suspect (R44, §3.2.3), and the broker doesn't refuse it. Once
+  its key is declared, the broker refuses its unsigned mail (R43), so declare the key
+  only after the agent signs with it (`amail key-status` says so).
 
 ### 3.2.3 The operator's registry
 
@@ -713,8 +829,26 @@ expiry, never its key; the repo owner chose one file for both.
   certificates counted, never a key's bytes.
 - Lookups compare cards without regard to case, and the file is read at each decision,
   so an edit takes effect without a restart.
-- The registry only declares. Refusing an agent's unsigned mail (R43) and marking a
-  failed signature suspect (R44) read it once every key is declared.
+- **Every agent message is judged against it (R44)**, by the broker when it hands the
+  message off and by the recipient at ingest, with one rule. A sender the registry
+  declares is held to its keys: unsigned, or signed with no key valid for it, is
+  suspect. Any other sender, and every sender while the registry is missing or can't
+  be trusted, is unverified. Nothing falls back to the keys a contact book declares.
+- **One card, one time.** The broker resolves the sender's card once, from a zone
+  address with its token removed, from the deployment's `agent_cards` for its own
+  domain, or from a local part that is itself a card. It writes that card and its
+  acceptance time (`sender_card`, `handed_off_at`) into the hand-off sidecar, and the
+  recipient judges by both, so the two never disagree on the same message. A sidecar
+  that doesn't name the message gives no card, and the mail is unverified. A
+  receiver's own domain comes from `domain` in its amail settings.
+- **The broker refuses what the receiver would mark suspect (R43).** At submission the
+  broker applies the same verdict at its own acceptance time. A declared agent's message
+  that is unsigned, or verifies against no key valid then, is refused with the verdict's
+  reason, recorded in the audit, and given a `denied` fate, so it never reaches a
+  recipient. Enforcement follows the declaration agent by agent: an undeclared agent
+  isn't refused, which is how the landing declares first and enforces second. While the
+  registry can't be trusted nothing is refused, as nothing is verified, and the broker
+  warns of it on every submission until the operator repairs the file.
 
 ### 3.3 The audit record
 
@@ -763,7 +897,7 @@ from anything the broker says about itself:
 A sweep in flight, or due and not yet late, leaves the last ended one's verdict standing.
 
 **Stuck mail reaches a person** [MIS-0004-R32 (stuck_mail_MUST_reach_a_person)] through the
-outside watch (persistent_layer §7.1), which reads that verdict for every home that
+outside watch (persistent_layer §4.1), which reads that verdict for every home that
 declares a sweep and alerts once per stretch as `mail-broker: SWEEP-FAILED`, by a path
 that is neither the broker nor any session. Mail an agent leaves unread past its own
 threshold reaches the same watch as `mail: UNREAD` (persistent_layer, the unread-mail
@@ -794,6 +928,18 @@ for an agent SHOULD contain every other agent in the deployment plus the named
 humans the deployment declares. A deployment MAY narrow any agent's list further.
 
 Changes to a contact list MUST take effect without rebuilding an image.
+
+An agent can see its own list: `macf_tools amail contacts [FILTER] [--json]` asks the broker over its
+socket for the entries it checks for the calling agent, each with its address and its direction
+(`both`, `outbound`, `inbound`, or `neither` for a withdrawn correspondent, which is listed so that
+withdrawn and never declared can be told apart). The broker answers, not the file, so what an agent
+sees is what is enforced now, and a change made since it last looked shows. The request names no agent:
+the kernel-established identity (on a shared login, the claim `status` also takes) selects whose list
+comes back, so an agent never sees another's. It is read-only and carries identity and direction only,
+never a key, a push grant or a route (4.2); the read is audited with its count. A list is changed in
+deployment configuration, never by this command. A broker with no contact list answers an empty list marked `contact_list: false`, so that
+an empty answer is not read as an agent with no correspondents (the read is audited with a count of zero), and an
+older broker refuses the operation by name.
 
 ### 4.2 Contact entries record identity, never reachability
 
@@ -1025,6 +1171,14 @@ Record it as a **history, not a last value** — a bounce after three deferrals 
 different fact from an immediate bounce, and only a sequence tells them apart. And an
 **unrecorded disposition MUST read as absent, never as delivered**: a caller that treats
 absence as success invents exactly the silent delivery this section exists to prevent.
+
+**The broker also answers by id** (MIS-0004 R24). `macf_tools amail state <id>` asks
+the broker where one message stopped, and the answer comes from the same record: each
+recipient's latest state with its detail and time, and the message-level view derived
+from them. It answers only for the caller's own messages. Another agent's id gets the
+same reply as an unknown one, `found: false`, so the answer reveals nothing about which
+ids another agent holds. The record stays readable from the filesystem when no broker
+runs. The socket is a second way in, not a replacement.
 
 A corollary worth stating because it was found the expensive way: **a store with a
 reader and no writer is a defect, not a stub.** If the read path exists and nothing
@@ -1262,6 +1416,11 @@ a tier justified by supervision cannot be declared alongside its own absence.
   supervision covers. The daemon and `amail status` name the tier and the
   supervision, and every audit line carries the tier, so a log read on another day
   says what boundary it was written under.
+- *A supervised host broker* is a declared unit of a primal daemon of its own, on the operator's
+  login since the host has no broker account (MIS-0002 R53; the MIS-0007 draft, #855, proposes the same
+  as its R81): `amail broker-unit` writes its service identity and declaration (2.1.3, step 5). Under
+  that draft, a system daemon would label its exports claimed (R33), and it would join one by an
+  `export` section the member adds (R71).
 - *Refusals move to where the declaration can be wrong.* A host-tier file refuses to
   run inside a container; a shared uid refuses without the tier; an agent-launched
   broker refuses without the tier; the tier refuses without a named supervision.

@@ -1,7 +1,7 @@
 """
 Hook logging infrastructure with unified agent-scoped paths.
 
-All logging uses /tmp/macf/{agent_id}/{session_id}/hooks/
+All logging uses <session root>/{agent_id}/{session_id}/hooks/, under this user's own runtime directory
 """
 import json
 import logging
@@ -16,7 +16,7 @@ from macf.utils import (
     get_hooks_dir,
     get_formatted_timestamp
 )
-from macf.config import ConsciousnessConfig
+from macf.config import ConsciousnessConfig, unresolved_agent_id
 from macf.observability import Warning, emit_warning
 
 
@@ -58,7 +58,7 @@ def log_hook_event(
                 agent_id = config.agent_id
             except Exception as e:
                 emit_warning(Warning(source="hook_logging", kind="agent_id_resolution_failed", detail=f"agent_id resolution failed: {e}"))
-                agent_id = 'unknown_agent'
+                agent_id = unresolved_agent_id(f"{type(e).__name__}: {e}")
 
         # Get hooks directory using unified path
         hooks_dir = get_hooks_dir(session_id, create=True)

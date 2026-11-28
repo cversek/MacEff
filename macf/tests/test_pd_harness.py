@@ -546,6 +546,9 @@ def test_channel_first(tmp_path, isolated_events_log, monkeypatch, capsys):
         def capture(self):
             return "\n".join(["─" * 60, "❯ ", "─" * 60, "  ? for shortcuts"])
 
+        def width(self):
+            return None
+
         def type(self, text):
             typed.append(text)
             return True
@@ -757,7 +760,7 @@ def test_a_failed_login_reaches_the_beat(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# A hand-started client: the core never starts a session unit beside one (persistent_layer 6.2)
+# A hand-started client: the core never starts a session unit beside one (persistent_layer 5.1)
 # ---------------------------------------------------------------------------
 
 def _unit_reasons(unit="session"):

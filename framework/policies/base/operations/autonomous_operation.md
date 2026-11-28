@@ -1,9 +1,10 @@
 # Autonomous Operation Policy
 
+**Type**: Operations
+**Scope**: All agents (PA and SA) capable of extended autonomous operation
+**Status**: ACTIVE
 **Version**: 1.9
 **Tier**: CORE
-**Category**: Operations
-**Status**: ACTIVE
 **Updated**: 2026-10-04
 
 ---
@@ -622,11 +623,11 @@ The checkpoint and the reflection are written wherever steps 1 to 3 end; the las
 
 | Step | Skill | Why it comes here |
 |------|-------|-------------------|
-| 1 | `/maceff:learnings:curate` | First, while the cycle's incidents are fresh; later steps cite what it writes. |
+| 1 | `/maceff-learnings-curate` | First, while the cycle's incidents are fresh; later steps cite what it writes. |
 | 2 | `/maceff-ideas-curate` | After the learnings, so an idea can be the mechanism that would prevent a failure a learning has just named. |
 | 3 | `/maceff-knowledge-web-curate` | Optional: run it only if the context left when this step is reached is above CL15. It links what steps 1 and 2 wrote, so skipping it costs least when they carry their own wiki-links. |
-| 4 | `/maceff:ccp` | After curation, so the checkpoint can point at what curation produced. |
-| 5 | `/maceff:jotewr` | Last, with the whole cycle in view: 5k tokens on a 1M window, 2k on 200K. |
+| 4 | `/maceff-ccp` | After curation, so the checkpoint can point at what curation produced. |
+| 5 | `/maceff-jotewr` | Last, with the whole cycle in view: 5k tokens on a 1M window, 2k on 200K. |
 
 The CL15 condition and the reflection sizes (5k tokens on a 1M window, 2k on 200K) are operator settings, set in 2026-10 and confirmed by the operator, as quoted on the pull request that added this sentence. The condition protects steps 4 and 5, which on one measured 1M deployment took about five CL points between them with policies read by section. An automatic wind-down on a 1M window starts at CL10, so step 3 runs only when the operator starts the sequence earlier.
 
@@ -731,13 +732,23 @@ matches. A dialog can still open for other reasons, and when
 `permissions.deny_under_full_autonomy` is true (default false;
 `MACF_DENY_UNDER_FULL_AUTONOMY` overrides it), the PermissionRequest hook denies it at
 once, with a reason, and records `permission_auto_denied` in the event log. It applies
-in AUTO_MODE when the operator is away (USER_IDLE or USER_REMOTE) or a sprint or play
-time is in active scope.
+in AUTO_MODE when the operator is away: USER_REMOTE, or USER_IDLE, which begins once
+`MACF_USER_IDLE_TIMEOUT_MINS` pass without a message from them.
 
 - **AUTO_MODE alone does not trigger it.** Operators stay in AUTO_MODE while attending,
   and then a dialog is fine.
-- **The state is derived.** There is no flag to arm or forget: the modes and the scope
-  decide, and if they can't be read the dialog stays up.
+- **Neither does a sprint or play time.** An operator present during one answers its
+  dialogs. The dialog stays up until they do, or until the idle timeout says they've gone
+  (the repo owner, 2026-11-09, after a sprint's dialogs were denied with him at the
+  keyboard).
+- **The state is derived.** There is no flag to arm or forget: the modes decide,
+  and if they can't be read the dialog stays up.
+- **Don't keep a copy of this rule in a hook of your own.** The rule is
+  `macf.permission_watch.full_autonomy_denial`, applied by the framework's PermissionRequest
+  hook; a script that re-implements it keeps whatever the rule was on the day it was written.
+  One seat's local copy went on denying dialogs for a sprint after the framework stopped, and
+  refused a question with the operator at the keyboard. The reason's wording says which one
+  fired: "Denied at once: ..." is the framework's. Set the config key and delete the copy.
 - **The default permission mode is exempt**, because nearly every write prompts there
   and denying would block the agent's own work. A mode the client doesn't report is
   treated the same way.
@@ -767,6 +778,22 @@ block: a system timer, a cron job, a supervisor.
   (default 10), and again every `--repeat` minutes (default 60). When a wait it
   reminded about ends, it sends one all-clear. A reminder that fails to send is
   tried again on the next pass. `--dry-run` prints instead of sending.
+- `macf_tools permissions how` answers "how was each of my calls approved?"
+  over the last `--days` (default 1, newest `--last` 30), derived from the event
+  log and nothing recorded for it (#1060): **at a dialog**, approved if the call
+  then ran and denied if not; else **by an allow rule** of today's settings that
+  covers the whole call (for a chain, every part), named with its file; else, by
+  elimination, **by the permission mode**, in auto mode its classifier. It is how
+  an agent tells whether a call went through on a rule or because the operator
+  answered, when the operator's presence is in doubt. Two limits: the rules are
+  today's, so a rule changed since the call isn't seen, and an answer at the
+  terminal and one over Remote Control look the same in the log.
+  **The one exception is said without asking:** at the start of each call, when
+  the session's previous call ran because the operator approved it at a dialog,
+  the agent is told so in one line (the operator's status line isn't). It is
+  read from the log back to the previous call only, so it costs milliseconds and
+  says each approval once; a call a rule or the mode let through says nothing,
+  and a denial the client already reports.
 - `macf_tools permissions history` answers "which dialogs has this agent met?"
   over the last `--days` (default 7), from the same event log and nothing else:
   when each opened, how long it waited, whether the command then ran, and the

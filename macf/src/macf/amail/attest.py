@@ -39,7 +39,9 @@ def acceptance_time(sidecar: Dict[str, Any], own_domain: str) -> Optional[dateti
 
     None unless the sidecar is this broker's own (rung ``local``, written under *own_domain*) and
     its time is a timezone-aware ISO time: a peer broker's sidecar is that broker's word."""
-    if sidecar.get("rung") != "local" or sidecar.get("origin_domain") != own_domain:
+    own = str(own_domain or "").strip().lower()
+    if (not own or sidecar.get("rung") != "local"
+            or str(sidecar.get("origin_domain") or "").strip().lower() != own):
         return None
     try:
         when = datetime.datetime.fromisoformat(str(sidecar.get("handed_off_at")))
@@ -91,6 +93,20 @@ def may_sign(card: str, public_key: str, registry: Registry,
     return public_key in registry.signing_keys(card, at=now)
 
 
+def sender_verdict(message: Any, card: Optional[str], registry: Registry,
+                   accepted_at: Optional[datetime.datetime]) -> Dict[str, Any]:
+    """:func:`registry_verdict` for *message* from the sender's *card*, the one rule the broker and
+    the receiver both apply (MIS-0004 R44). The card is the broker's single resolution of the
+    sender's address (:func:`zone.card_for_address`), which the receiver reads from the hand-off
+    sidecar; with none, the sender is outside mail and unverified, never a guess."""
+    if card is None:
+        return {"attests": None, "shared_with": [], "keys_declared": None,
+                "accepted_at": accepted_at.isoformat() if accepted_at else None,
+                "trust": TrustClass.UNVERIFIED.value,
+                "reason": "no calling card is known for the sender; nothing can be concluded"}
+    return registry_verdict(message, card, registry, accepted_at)
+
+
 def registry_verdict(message: Any, card: str, registry: Registry,
                      accepted_at: Optional[datetime.datetime]) -> Dict[str, Any]:
     """The receiver's verdict on *message* from *card*, against the operator's registry.
@@ -107,6 +123,7 @@ def registry_verdict(message: Any, card: str, registry: Registry,
         loaded = registry.load()
     except RegistryError as e:
         return {**verdict, "trust": TrustClass.UNVERIFIED.value, "keys_declared": None,
+                "registry_trusted": False,
                 "reason": f"the operator's registry can't be trusted ({e}); nothing verified"}
     entry = next((e for c, e in loaded.agents.items() if calling_card.same(c, card)), None)
     declared = list(entry.keys) if entry else []

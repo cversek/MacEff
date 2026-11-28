@@ -134,6 +134,25 @@ def agent_can_write(program: Path) -> bool:
     return os.access(program, os.W_OK) or os.access(program.parent, os.W_OK)
 
 
+def link_swappable(path: Path, _depth: int = 0) -> bool:
+    """Whether a link on the way to *path* sits in a folder this account can write, so the link
+    could be pointed elsewhere after the check (#758). Resolving the path first checks only the
+    file it reaches today; every link on the way, a folder's or the file's, and every link its
+    target names, is checked here. A chain too long to follow counts as swappable."""
+    if _depth > 40:
+        return True
+    walked = Path(path.anchor)
+    for part in path.parts[1:]:
+        walked = walked / part
+        if walked.is_symlink():
+            if os.access(walked.parent, os.W_OK):
+                return True
+            target = Path(os.readlink(walked))
+            if link_swappable(target if target.is_absolute() else walked.parent / target, _depth + 1):
+                return True
+    return False
+
+
 def _prompt_digest(s: Schedule, agent_home: Optional[Path]) -> Optional[str]:
     if not isinstance(s.run, PromptRun):
         return None
@@ -450,6 +469,9 @@ class Scheduler:
             return f"the template names its program {program} without an absolute path, so what runs isn't fixed"
         if agent_can_write(program.resolve()):
             return f"the template's program {program} is one the agent's account can write, so it could rewrite it"
+        if link_swappable(program):
+            return (f"the template's program {program} is reached through a link the agent's account "
+                    f"can change, so what runs could be swapped")
         return ""
 
     def _start_check(self, entry_id: str, entry: dict, due: datetime, late_s: float) -> None:
@@ -655,7 +677,7 @@ class Scheduler:
                 kept.write_bytes(b"")
         try:
             run.stdout_path.unlink()
-        except FileNotFoundError:
+        except FileNotFoundError:  # noqa: S110 - the run removed the output or never wrote it; nothing is lost
             pass  # noqa: MACEFF003 - the run removed it or never wrote it; nothing is lost
         self._say(EVENT_DONE, {"schedule": run.schedule.name, "scheduled_for": _iso(run.scheduled_for),
                                "outcome": outcome, "exit_code": code, "wake": wake})
@@ -723,8 +745,16 @@ class Scheduler:
     def _signal(self, run: _Run, sig) -> None:
         try:
             os.killpg(run.proc.pid, sig)
-        except ProcessLookupError:
+        except ProcessLookupError:  # noqa: S110 - the group ended between the poll and the signal; there is nothing left to signal
             pass  # noqa: MACEFF003 - the group ended between the poll and the signal
+
+    def stop_run(self, name: str, why: str) -> None:
+        """Stop *name*'s run in flight, if any, as asked: it ends ``stopped: <why>``, and a run
+        stopped on purpose owes no failure notice (#746). The kill follows the grace, as for any run."""
+        run = self.running.get(name)
+        if run is not None and run.stopped_by is None:
+            run.stopped_by = why
+            self._term(run, self.clock())
 
     def shutdown(self) -> None:
         """Stop the runs in flight as the daemon stops; each is recorded as it ends."""

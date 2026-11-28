@@ -12,8 +12,12 @@ from macf.hooks import handle_permission_request as hook
     ({"AUTO_MODE"}, False, "auto", False),                   # the operator attends in AUTO_MODE
     ({"AUTO_MODE", "USER_IDLE"}, False, "auto", True),
     ({"AUTO_MODE", "USER_REMOTE"}, False, "auto", True),
-    ({"AUTO_MODE", "SPRINT"}, False, "auto", True),
-    ({"AUTO_MODE"}, True, "auto", True),
+    # The operator present during a sprint or play time answers the dialog themselves: until the
+    # presence timeout (USER_IDLE) or a remote mode says they're away, it stays up (#963).
+    ({"AUTO_MODE", "SPRINT"}, False, "auto", False),
+    ({"AUTO_MODE"}, True, "auto", False),
+    ({"AUTO_MODE", "SPRINT", "USER_IDLE"}, False, "auto", True),   # the timeout passed mid-sprint
+    ({"AUTO_MODE", "USER_REMOTE"}, True, "auto", True),
     ({"USER_IDLE", "SPRINT"}, True, "auto", False),          # MANUAL_MODE: the operator drives
     ({"AUTO_MODE", "USER_IDLE"}, False, "default", False),   # every write prompts: it would block all work
 ])

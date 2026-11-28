@@ -43,7 +43,7 @@ from typing import Callable, Dict, List, Mapping, Optional
 
 from macf.notify.session import proc_start
 from macf.pd.interface import check_socket_path, runtime_dir
-from macf.pd.liveness import (ENV_HOME, ENV_INTERVAL, ENV_SESSION_INTERVAL, ENV_SESSION_PID,
+from macf.pd.liveness import (ENV_HOME, ENV_INTERVAL, ENV_LAUNCH, ENV_SESSION_INTERVAL, ENV_SESSION_PID,
                               ENV_SESSION_UNIT, ENV_UNIT)
 
 #: What the agent's tmux directory is called inside the runtime directory, after the
@@ -83,7 +83,7 @@ def _group_alive(pgid: int) -> bool:
         for stat in proc.glob("[0-9]*/stat"):
             try:
                 fields = stat.read_text().rpartition(")")[2].split()
-            except OSError:
+            except OSError:  # noqa: S112 - a /proc entry that exits during the scan is routine
                 continue
             if len(fields) > 2 and fields[2] == str(pgid) and fields[0] != "Z":
                 return True
@@ -204,7 +204,7 @@ def session_environment(environ: Mapping[str, str], wrapper_pid: int, tmux_tmpdi
     The unit's own variables become the session's: ``MACF_PD_UNIT`` and its interval
     are removed, and ``MACF_PD_SESSION_*`` name the unit and this wrapper's pid for the
     transcript monitor. Without a declared unit there is no liveness to hand on."""
-    env = {k: v for k, v in environ.items() if k not in (ENV_UNIT, ENV_INTERVAL, "TMUX", "TMUX_PANE")}
+    env = {k: v for k, v in environ.items() if k not in (ENV_UNIT, ENV_INTERVAL, ENV_LAUNCH, "TMUX", "TMUX_PANE")}
     unit, interval = environ.get(ENV_UNIT), environ.get(ENV_INTERVAL)
     if unit and interval and environ.get(ENV_HOME):
         env[ENV_SESSION_UNIT] = unit
@@ -256,10 +256,86 @@ def _tmux(tmux: str, env: Mapping[str, str], *args: str) -> subprocess.Completed
     return subprocess.run([tmux, *args], env=dict(env), capture_output=True, text=True, timeout=15)
 
 
+def attached_clients(agent: str, base: Optional[Path] = None) -> int:
+    """How many tmux clients are attached to the agent's session unit server, 0 when none or when no server
+    answers (a missing server has nothing to end)."""
+    env = client_environment(agent, base)
+    if env is None:
+        return 0
+    try:
+        done = subprocess.run(["tmux", "list-clients", "-F", "#{client_pid}"], env=env, capture_output=True,
+                              text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"⚠️ MACF: session unit: could not count the clients attached to {agent}'s tmux server "
+              f"({type(e).__name__}); a restart is not held back for them", file=sys.stderr)
+        return 0
+    return len(done.stdout.split()) if done.returncode == 0 else 0
+
+
+def _announce(append: Callable[[str, dict], bool], agent: str, pane_pid: Optional[int],
+              respawns: int, launch: Optional[str] = None) -> None:
+    """Say which pane runs the session now: the daemon's word that this wrapper can respawn it,
+    and, after a respawn, that the session is a new incarnation (MacEff #726)."""
+    from macf.pd.interface import EVENT_SESSION_PANE
+    data = {"agent": agent, "wrapper_pid": os.getpid(), "wrapper_start": proc_start(os.getpid()),
+            "pane_pid": pane_pid, "respawns": respawns}
+    if launch:
+        data["launch"] = launch      # what the daemon launched this wrapper with, so it can tell a changed declaration
+    if not append(EVENT_SESSION_PANE, data):
+        print(f"⚠️ MACF: session unit: the {EVENT_SESSION_PANE} event was not recorded; the daemon "
+              f"will restart this unit whole", file=sys.stderr)
+
+
+def respawn_session(tmux: str, env: Mapping[str, str], agent: str,
+                    pane_groups: Mapping[int, Optional[str]]) -> Optional[tuple]:
+    """Restart the session in its pane and keep the server, so attached clients stay
+    attached (MacEff #726). Returns (pane pid, its groups), or None after saying why.
+
+    The pane is kept while the old session ends (``remain-on-exit``), and the old session's
+    groups are reaped as the unit's own end reaps them, SIGTERM and then SIGKILL, before the
+    pane runs again: the session resumes its conversation (``claude -c``), and two at once
+    would share it. ``respawn-pane`` then runs the pane's own command again."""
+    target = f"={agent}:"
+    if _tmux(tmux, env, "has-session", "-t", f"={agent}").returncode != 0:
+        print(f"⚠️ MACF: session unit: no session {agent} answers on this server; it can't be "
+              f"restarted in place", file=sys.stderr)
+        return None
+    held = _tmux(tmux, env, "set-option", "-w", "-t", target, "remain-on-exit", "on")
+    if held.returncode != 0:
+        print(f"⚠️ MACF: session unit: could not keep the pane while its session ends: "
+              f"{(held.stderr or held.stdout).strip()[:200]}", file=sys.stderr)
+        return None
+    for pgid, leader_start in pane_groups.items():
+        if not reap_group(pgid, leader_start=leader_start):
+            print(f"⚠️ MACF: session unit: process group {pgid} of session {agent} survived SIGKILL; "
+                  f"not starting a second session beside it", file=sys.stderr)
+            _tmux(tmux, env, "set-option", "-w", "-t", target, "remain-on-exit", "off")
+            return None
+    again = _tmux(tmux, env, "respawn-pane", "-k", "-t", target)
+    _tmux(tmux, env, "set-option", "-w", "-t", target, "remain-on-exit", "off")
+    if again.returncode != 0:
+        print(f"⚠️ MACF: session unit: the pane could not run its session again: "
+              f"{(again.stderr or again.stdout).strip()[:200]}", file=sys.stderr)
+        return None
+    shown = _tmux(tmux, env, "display-message", "-p", "-t", target, "#{pane_pid}")
+    try:
+        pane = int(shown.stdout.strip())
+    except ValueError:
+        print(f"⚠️ MACF: session unit: tmux named the respawned pane's pid as {shown.stdout.strip()!r}",
+              file=sys.stderr)
+        return None
+    groups: Dict[int, Optional[str]] = {}
+    group = pane_group(pane, os.getpgid(0))
+    if group is not None:
+        groups[group] = proc_start(group)
+    return pane, groups
+
+
 def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
         conf: Optional[Path] = None, extra_env: Optional[Mapping[str, str]] = None,
         environ: Optional[Mapping[str, str]] = None, tmux: str = "tmux",
-        base: Optional[Path] = None, ready_timeout: float = READY_TIMEOUT_S) -> int:
+        base: Optional[Path] = None, ready_timeout: float = READY_TIMEOUT_S,
+        append: Optional[Callable[[str, dict], bool]] = None) -> int:
     """Be the session unit until the session ends; return the tmux server's exit status.
 
     ``child`` is the command the session runs (the harness child script). A declared
@@ -305,6 +381,13 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _stop)
 
+    # SIGUSR1 asks for the session to restart in its pane (MacEff #726). The handler only
+    # marks the ask; the wait loop below does the work, outside the signal handler.
+    respawn_asked = []
+    signal.signal(signal.SIGUSR1, lambda _s, _f: respawn_asked.append(True))
+    if append is None:
+        from macf.agent_events_log import append_event as append
+
     deadline = time.monotonic() + ready_timeout
     while _tmux(tmux, env, "show-options", "-s", "exit-empty").returncode != 0:
         if server.poll() is not None or time.monotonic() > deadline:
@@ -322,6 +405,16 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     # sets its own title (its version), which said nothing about whose session it was,
     # so on this server, which holds only this session, it may not. Nor may a program
     # rename the window with tmux's own escape (allow-rename).
+    # Modified keys such as Shift-Tab reach the client only with extended keys on: with tmux's default
+    # (off) they are lost after the first presses (#1016). The baseline file carries these too, but a
+    # file written before they were added, or none, leaves them off, so the server is told here.
+    for args in (("-s", "extended-keys", "always"), ("-as", "terminal-features", "xterm*:extkeys")):
+        done = _tmux(tmux, env, "set-option", *args)
+        if done.returncode != 0:
+            # tmux before 3.2 has no extended-keys: Shift-Tab then depends on the terminal.
+            print(f"⚠️ MACF: session unit: this tmux refused {args[1]} "
+                  f"({(done.stderr or done.stdout).strip()[:120]}); Shift-Tab may be lost after a few presses",
+                  file=sys.stderr)
     card = window_title(agent)
     for option in (("set-titles", "on"), ("set-titles-string", card), ("allow-set-title", "off"),
                    ("automatic-rename", "off"), ("allow-rename", "off")):
@@ -361,7 +454,31 @@ def run(agent: str, child: Path, *, project_dir: Optional[Path] = None,
     _tmux(tmux, env, "set-option", "-s", "exit-empty", "on")
     print(f"📡 MACF: session unit: session {agent} runs under tmux server {server.pid} "
           f"(TMUX_TMPDIR={directory})", file=sys.stderr)
-    status = server.wait()
+    respawns = 0
+    _announce(append, agent, int(panes[0]) if panes and panes[0].isdigit() else None, respawns,
+              environ.get(ENV_LAUNCH))
+    while True:
+        try:
+            status = server.wait(timeout=0.2)
+            break
+        except subprocess.TimeoutExpired:  # noqa: S110 - the server runs on; the loop only looks for a respawn ask
+            pass
+        if not respawn_asked:
+            continue
+        respawn_asked.clear()
+        done = respawn_session(tmux, env, agent, pane_groups)
+        if done is None:
+            # The session can't be restarted in place, so the unit ends and the daemon,
+            # which asked for a restart, starts it again whole.
+            print(f"⚠️ MACF: session unit: restarting {agent} whole instead", file=sys.stderr)
+            _stop(None, None)
+            continue
+        pane, pane_groups = done
+        _write_pane_record(directory, pane_groups)
+        respawns += 1
+        print(f"📡 MACF: session unit: session {agent} restarted in its pane (pid {pane}); "
+              f"tmux server {server.pid} kept", file=sys.stderr)
+        _announce(append, agent, pane, respawns, environ.get(ENV_LAUNCH))
     # The unit ends only when the session has: a pane that outlived the server's hangup is
     # stopped here, so a restart never starts a second session beside it.
     for pgid, leader_start in pane_groups.items():
@@ -428,8 +545,9 @@ def _remove_leftovers(tmux: str, env: Mapping[str, str], directory: Path) -> Non
     if socket.is_socket() and _tmux(tmux, env, "has-session").returncode != 0:
         try:
             socket.unlink()
-        except OSError:
-            pass
+        except OSError as e:
+            print(f"⚠️ MACF: session unit: removing the stale tmux socket {socket} failed "
+                  f"(leaving it in place): {e}", file=sys.stderr)
     for path in (socket.parent, directory):
         if not path.is_dir() or any(path.iterdir()):
             break                      # something else is in it: it stays

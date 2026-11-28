@@ -67,8 +67,8 @@ def remove_pid_file() -> None:
     pid_file = get_pid_file_path()
     try:
         pid_file.unlink(missing_ok=True)
-    except OSError:
-        pass
+    except OSError as e:
+        print(f"⚠️ MACF: could not remove PID file (a stale file may be left behind): {e}", file=sys.stderr)
 
 
 #: How long the load-phase ticker vouches for a model load before it stops, so a load that
@@ -342,7 +342,7 @@ class SearchService:
                 try:
                     client, addr = self.server_socket.accept()
                     self._handle_client(client)
-                except socket.timeout:
+                except socket.timeout:  # noqa: S112 - the 1s accept timeout is the idle tick that rechecks self.running
                     continue  # Check running flag
                 except OSError:
                     if self.running:

@@ -1,12 +1,14 @@
 # CONTEXT_MANAGEMENT
 
+**Type**: Framework Foundation
+**Scope**: All agents (PA and SA)
+**Status**: ACTIVE
+
 ## Meta-Policy: Policy Classification
 - **Tier**: MANDATORY
-- **Category**: Framework Foundation
 - **Version**: 1.1.0
 - **Dependencies**: policy_awareness, core_principles
 - **Authority**: MacEff Framework
-- **Status**: ACTIVE
 
 ## Policy Statement
 Agents must maintain awareness of time and token constraints, prepare for compaction trauma, and use checkpoint protocols to preserve continuity across context resets.
@@ -314,7 +316,7 @@ YYYY-MM-DD_HHMMSS_Description_ccp.md
 ### 4.1 Token Budget Breakdown
 
 **Claude Code 2.0 Transparent Accounting**:
-- **Total context window**: Configurable via `MACF_CONTEXT_WINDOW` env var (default: 200k; set to 1000000 for 1M models)
+- **Total context window**: Configurable via `MACF_CONTEXT_WINDOW` env var (default: 200k; set to 1000000 for 1M models); or `context.window` in `.maceff/config.json`. Nothing detects the window from the account, so when neither is set the 200k is an assumption: `macf_tools env` and the hook's token section say "assumed default" beside it, and every CL level and boundary warning is then measured against that number. An agent that sees the label and has a larger window sets one of the two before trusting a CL level.
 - **Overhead varies by window size**: On 200k, ~45k reserved (22.5%). On 1M, only ~53k overhead (~5%), mostly system prompt/tools — compact buffer drops from 45k to 3k
 - **Usable space**: ~155k on 200k window; ~947k on 1M window
 
@@ -356,6 +358,8 @@ YYYY-MM-DD_HHMMSS_Description_ccp.md
 - Detects fake "previous conversation" message
 - Injects strong consciousness activation via `additionalContext`
 - Provides artifact list and recovery instructions
+
+**An agent's own banner**: the banner that opens the recovery message is the framework's unless the agent's home holds `.maceff/recovery_header.md`, whose text then replaces it. The recovery essentials (the mode and the artifacts to open) still come first, and the mode's own section still follows, whichever banner is used. An empty file is ignored; one that can't be read is reported and the framework's banner is used. This exists so that a banner's wording can be tried in one agent's sessions without changing every other agent's (#995).
 
 **Output Format**:
 ```json

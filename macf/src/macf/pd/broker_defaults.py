@@ -1,4 +1,4 @@
-"""Every daemon's own broker, when its declaration says nothing more (persistent_layer 11.4).
+"""Every daemon's own broker, when its declaration says nothing more (persistent_layer 3.4).
 
 The event stream is the daemon's own MQTT broker for every daemon (MIS-0002 R150 to R156). A
 declaration may name its broker in full (``broker``): its port, the certificate authority and the
@@ -146,7 +146,7 @@ def dependency_remedy(missing: List[str], executable: str = sys.executable) -> s
     install = (f"{executable} -m pip install -e {project}" if project is not None
                else f"{executable} -m pip install --upgrade macf")
     return (f"this daemon's interpreter ({executable}) lacks {', '.join(missing)}, which every daemon's "
-            f"own broker needs (persistent_layer 11.4); an editable install doesn't gain new "
+            f"own broker needs (persistent_layer 3.4); an editable install doesn't gain new "
             f"dependencies when its checkout updates. Install them, then start again: {install}")
 
 
@@ -165,8 +165,10 @@ def with_own_broker(declaration, home: Path, card: str):
 def broker_unit(card: str, account: str):
     """The broker unit a declaration that declares none gets: the wrapper, run as the daemon's own
     account, with the interpreter the daemon itself runs."""
+    from macf.pd.broker_unit import WRAPPER_UNIT_STOP_GRACE_S
     from macf.pd.interface import Unit
     return Unit(name="broker", kind="service",
                 command=[sys.executable, "-m", "macf.pd.broker_unit", "{runtime_dir}/" + card + ".broker/mosquitto.conf"],
                 account=account, restart="always", liveness_interval_s=60, memory_limit_mb=64,
+                stop_grace_s=WRAPPER_UNIT_STOP_GRACE_S,   # the wrapper's own stop path is longer than the default (#992)
                 environment={"HOME": "{agent_home}", "MACEFF_AGENT_HOME_DIR": "{agent_home}", "PATH": BROKER_PATH})

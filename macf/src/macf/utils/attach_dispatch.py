@@ -10,7 +10,7 @@ The order of preference, for an agent on this endpoint:
 2. the legacy harness's session, only for an agent that declares no session unit.
 
 A declared session unit that can't be resolved is said, with the reason, and nothing is
-attached: falling back to a name there is exactly what R100 forbids (persistent_layer 4.1).
+attached: falling back to a name there is exactly what R100 forbids (persistent_layer 9.1).
 """
 from __future__ import annotations
 
@@ -22,6 +22,34 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from .attach import NONE, TMUX, AttachPlan, window_commands
 from .roster import LOCAL, RosterEntry
+
+
+def control_refusal(argv: Sequence[str], environ: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Why ``argv`` can't be run on this terminal, or None. tmux control mode (``-CC``) speaks a protocol
+    only iTerm2 understands: handed to any other terminal it prints nothing and never returns (#987). The
+    terminal is read from ``TERM_PROGRAM`` or, since that doesn't cross ssh or survive tmux, ``LC_TERMINAL``.
+    ``MACF_ATTACH_CONTROL=force`` lets a terminal this doesn't recognize try it. A ``-CC`` in an element
+    that is a command string (an ssh hand-off) counts as much as one that is its own element."""
+    import shlex
+    env = os.environ if environ is None else environ
+    wanted = False
+    for element in argv:
+        try:
+            words = shlex.split(element)
+        except ValueError:
+            words = element.split()
+        if "-CC" in words or element == "-CC":
+            wanted = True
+            break
+    if not wanted:
+        return None
+    if env.get("TERM_PROGRAM") == "iTerm.app" or env.get("LC_TERMINAL") == "iTerm2" \
+            or env.get("MACF_ATTACH_CONTROL") == "force":
+        return None
+    return ("tmux control mode (--control, -CC) works only in iTerm2: any other terminal shows nothing and "
+            "never returns, so it is not started. Attach with --no-control (a plain attach; it also overrides a "
+            "declared `control: true`), or --read-only to watch, or run this from iTerm2. If this is iTerm2 and "
+            "it isn't recognized, set MACF_ATTACH_CONTROL=force.")
 
 
 @dataclass(frozen=True)

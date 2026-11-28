@@ -18,10 +18,10 @@ delivery time, and is never recorded in the address or the contact list:
     rung 1   recipient's mailbox is on this host          -> pickup box, direct write
     rung 1s  recipient's broker shares a filesystem with   -> pickup box across the
              this one (a bind-mounted hand-off root)          mount, same write
-    rung 2   peer broker on a private network             -> not implemented (seam below)
+    rung 2   peer broker on a private network             -> the peer's listener (peer_link.py)
     rung 3   anything else                                -> outbound relay (Phase 6)
 
-Rungs 1 and 1s are implemented. The others raise a specific, logged error rather
+Rungs 1, 1s and 2 are implemented. Rung 3 raises a specific, logged error rather
 than silently succeeding — a transport that reports delivery it did not perform
 is the failure this whole subsystem is built to avoid.
 
@@ -35,6 +35,7 @@ its domain, which is the one thing that should change.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import hashlib
 import json
 import os
@@ -61,9 +62,8 @@ from .audit import AuditLog
 from .contacts import ContactBook, ContactListError
 from .models import Message, new_id, _now_iso
 from .trust import TrustClass, LOCAL_SUBMISSION
-from .crypto import verify
 from .store import deliver, ensure_maildir
-from . import store
+from . import socket_protocol, store
 
 DEFAULT_SOCKET = "/run/amail/broker.sock"
 
@@ -194,6 +194,12 @@ class DeliveryError(RuntimeError):
     """Transport could not deliver. Never swallowed into a success."""
 
 
+class PairRefused(DeliveryError):
+    """A peer's pair that this broker will never take, however often it is sent: an unusable name or
+    sidecar, a payload that does not match its hash, or an origin that is not the declared peer. The
+    peer is told it was refused, so its copy is set aside and not retried for good (MIS-0004 R60)."""
+
+
 #: The peer-intake subtree of a hand-off root. One directory per PEER DOMAIN,
 #: provisioned by the broker that owns the root, written by the peer's broker
 #: across the mount, swept by the owner. Kept beside the agents' boxes so one
@@ -244,6 +250,34 @@ class SharedRoute:
     domain: str
     local: str
     decl: SharedHandoff
+
+
+@dataclass(frozen=True)
+class PeerLink:
+    """A peer broker reachable over a private network (rung 2, MIS-0004 R56 to R64).
+
+    Declared per DOMAIN in `BrokerConfig.peer_links`, in the operator-written broker
+    configuration. `host` is the peer's private address: a connection TO it carries our mail,
+    and a connection FROM it is the only one this broker's listener treats as that peer's.
+    `port` is where the peer's listener answers."""
+
+    host: str
+    port: int
+    note: str = ""
+    #: The peer's agents: box name (the address local part) -> calling card. The receiving broker
+    #: judges a peer message's signature against the registry key of the card its sender's address
+    #: names (MIS-0004 R44), and a peer with no agents declared names none, so its mail reads
+    #: unverified whatever it carries.
+    agents: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class PeerRoute:
+    """Where a rung-2 recipient resolves: the peer's domain, the address local-part, and the link."""
+
+    domain: str
+    local: str
+    link: PeerLink
 
 
 class Identity(str):
@@ -348,6 +382,10 @@ class BrokerConfig:
     #: sender's contacts decide who may be written to, and the recipient's
     #: own book decides acceptance at ingest, because the sending broker
     #: cannot read the peer's book and must not pretend it did.
+    #: Rung 2: peer brokers reachable over a private network, keyed by mail domain (R56).
+    peer_links: Dict[str, PeerLink] = field(default_factory=dict)
+    #: Rung 2, receiving side: the one private (host, port) the listener binds; None means none runs.
+    peer_listen: Optional[Tuple[str, int]] = None
     shared_handoffs: Dict[str, SharedHandoff] = field(default_factory=dict)
 
     #: How often the broker sweeps its OWN peer intake (rung 1s, receiving
@@ -494,7 +532,7 @@ class BrokerConfig:
                 try:
                     if local_part_from_card(card, token) == local:
                         return SharedRoute(domain=dom, local=box, decl=decl)
-                except ValueError:
+                except ValueError:  # noqa: S112 - declared cards are validated at config load; skip only for hand-built configs
                     continue
         return None
 
@@ -517,6 +555,17 @@ class BrokerConfig:
             return None
         return SharedRoute(domain=dom, local=local, decl=decl)
 
+    def peer_link_for(self, address: str) -> Optional[PeerRoute]:
+        """The route when *address* is under a peer reachable over a declared private-network
+        link; else None. Our own domain is never a peer, as for shared_for, and a domain that is
+        also a shared hand-off stays shared: the cheaper wire wins."""
+        addr = address.strip().lower()
+        local, _, dom = addr.partition("@")  # noqa: MACEFF005 - str.partition's (before, sep, after) contract is fixed by the stdlib
+        if not local or not dom or dom == self.domain.lower() or dom in self.shared_handoffs:
+            return None
+        link = self.peer_links.get(dom)
+        return PeerRoute(domain=dom, local=local, link=link) if link else None
+
 
 @dataclass(frozen=True)
 class DeliveryOutcome:
@@ -532,16 +581,25 @@ class DeliveryOutcome:
     two shapes in one function. All three are converted here.
     """
 
-    rung: str      #: "local", "shared" or "internet" -- which delivery path was taken
+    rung: str      #: "local", "shared", "peer" or "internet" -- which delivery path was taken
     trust: str     #: what verification actually proved, "" when not applicable
     state: str     #: "delivered", "refused", or the transport's own state
     detail: str    #: human-readable reason; "" on success
+
+
+def _accepted_now() -> datetime.datetime:
+    """This broker's acceptance time, timezone-aware and to the second, as the sidecar records it."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
 
 
 class Broker:
     def __init__(self, config: BrokerConfig):
         self.config = config
         self.contacts = ContactBook(config.contacts_path) if config.contacts_path else None
+        # The operator's registry, which every signature is judged against (MIS-0004 R42, R44):
+        # the host's one root-owned file, wherever registry_path() says it is.
+        from .registry import Registry, registry_path
+        self.registry = Registry(registry_path())
         self.audit = (AuditLog(config.audit_path, tier=config.tier)
                       if config.audit_path else None)
         self._warned_peers: set = set()
@@ -982,12 +1040,14 @@ class Broker:
             try:
                 if json.loads(f.read_text()).get("thread_id") == thread_id:
                     return True
-            except (OSError, json.JSONDecodeError):
+            except (OSError, json.JSONDecodeError) as e:
+                print(f"⚠️ MACF: ledger scan for thread {thread_id} failed on {f} (record skipped, "
+                      f"thread treated as unseen): {e}", file=sys.stderr)
                 continue
         return False
 
     def hand_off(self, agent: str, message: Message, trust: str,
-                 via: str = "") -> Path:
+                 via: str = "", accepted_at: Optional[str] = None) -> Path:
         """Hand a delivered message into the recipient's pickup box.
 
         UNIFIED DELIVERY. This replaced a direct write into the recipient's
@@ -1026,7 +1086,10 @@ class Broker:
         stem = f"{int(time.time())}-{message.message_id}"
         sidecar = {
             "kind": "bundle",
-            "handed_off_at": _now_iso(),
+            # The time the trust was judged at, so the recipient judges at the same one (R45).
+            "handed_off_at": accepted_at or _now_iso(),
+            # The sender's card as this broker resolved it, which the recipient judges by (R44).
+            "sender_card": self.sender_card(message),
             "message_id": message.message_id,
             "sender": message.sender,
             "recipient": self.config.address_for(agent),
@@ -1198,11 +1261,179 @@ class Broker:
         }
         return self._write_pair(box, stem, sidecar, payload, gid=decl.gid)
 
+    # ------------------------------------------------------------- rung 2, sending
+
+    def _outbox(self, domain: str) -> Path:
+        """Where pairs wait for a peer that has not acknowledged them: our own tree, our own account."""
+        root = self.config.inbound_handoff
+        if root is None:
+            raise DeliveryError("no hand-off root is declared, so a message for a peer that is down "
+                                "cannot be kept; refusing rather than risk losing it")
+        return Path(root) / "_outbox" / domain.strip().lower()
+
+    def hand_off_peer(self, route: PeerRoute, message: Message) -> DeliveryOutcome:
+        """Rung 2: send *message* to the peer's listener and keep it until the peer acknowledges.
+
+        The peer's reply after a durable write is the report MIS-0004 R11 asks the next holder for
+        (R60), so a copy is dropped only on `ok`. A peer that is down, slow or answering something
+        that is not a reply leaves the pair in the outbox and the outcome deferred, and the next
+        sweep tries again (R61). A peer that refuses is a refusal, recorded as one: retrying
+        what a peer will not take would only repeat it."""
+        from . import peer_link
+        payload = message.serialize().encode("utf-8")
+        safe_local = re.sub(r"[^A-Za-z0-9._-]", "_", route.local).lower()
+        stem = f"{int(time.time())}-{message.message_id}-{safe_local}"
+        sidecar = {
+            "kind": "bundle",
+            "handed_off_at": _now_iso(),
+            "message_id": message.message_id,
+            "sender": message.sender,
+            "recipient": f"{route.local}@{route.domain}",
+            "raw_sha256": hashlib.sha256(payload).hexdigest(),
+            "authorization": {
+                "outcome": "peer-link",
+                "reason": (f"sender '{message.sender}' is permitted this destination by its own "
+                           f"broker at '{self.config.domain}'; acceptance is the peer broker's "
+                           f"decision, made on its side"),
+            },
+            "rung": "peer",
+            "origin_domain": self.config.domain,
+        }
+        try:
+            return self._send_pair(route.domain, route.link, stem, sidecar, payload)
+        except peer_link.Deferred as e:
+            box = self._outbox(route.domain)
+            box.mkdir(parents=True, mode=0o700, exist_ok=True)
+            try:
+                self._write_pair(box, stem, sidecar, payload, gid=None)
+            except (DeliveryError, OSError) as keep_error:
+                raise DeliveryError(f"the peer '{route.domain}' did not acknowledge ({e}) and the copy "
+                                    f"could not be kept for a retry ({keep_error}); nothing was sent") from keep_error
+            return DeliveryOutcome(rung="peer", trust="", state="deferred",
+                                   detail=f"kept for a retry: {e}")
+
+    def _send_pair(self, domain: str, link: PeerLink, stem: str, sidecar: Dict[str, Any],
+                   payload: bytes) -> DeliveryOutcome:
+        """One attempt: delivered on the peer's acknowledgement, Deferred when there is none,
+        DeliveryError when the peer refuses."""
+        import base64
+        from . import peer_link
+        try:
+            reply = peer_link.send_request(link.host, link.port, {
+                "op": "hand_off", "from": self.config.domain, "stem": stem, "sidecar": sidecar,
+                "payload_b64": base64.b64encode(payload).decode("ascii")})
+        except ConnectionError as e:
+            raise peer_link.Deferred(str(e)) from e
+        if reply.get("ok") is True:
+            return DeliveryOutcome(rung="peer", trust="", state="delivered", detail="")
+        reason = str(reply.get("reason") or "no reason given")
+        if reply.get("refused"):
+            raise DeliveryError(f"the peer '{domain}' refused it: {reason}")
+        raise peer_link.Deferred(f"the peer '{domain}' could not store it: {reason}")
+
+    def flush_outbox(self) -> List[Dict[str, Any]]:
+        """Try again every pair waiting for a peer. Returns one dict per pair examined."""
+        from . import peer_link
+        results: List[Dict[str, Any]] = []
+        root = self.config.inbound_handoff
+        if root is None:
+            return results
+        for domain, link in sorted(self.config.peer_links.items()):
+            box = self._outbox(domain)
+            if not box.is_dir():
+                continue
+            for amsg in sorted(box.glob("*.amsg")):
+                sidecar_path = amsg.with_suffix(".json")
+                entry: Dict[str, Any] = {"name": amsg.name, "peer": domain}
+                try:
+                    payload = amsg.read_bytes()
+                    sidecar = json.loads(sidecar_path.read_text())
+                except (OSError, ValueError) as e:
+                    entry.update(state="unreadable", reason=f"{type(e).__name__}: {e}")
+                    results.append(entry)
+                    continue
+                try:
+                    outcome = self._send_pair(domain, link, amsg.stem, sidecar, payload)
+                except peer_link.Deferred as e:
+                    entry.update(state="deferred", reason=str(e))
+                except DeliveryError as e:
+                    try:
+                        aside = box / "refused"
+                        aside.mkdir(mode=0o700, exist_ok=True)
+                        sidecar["refused"] = {"reason": str(e), "at": _now_iso()}
+                        (aside / amsg.name).write_bytes(payload)
+                        (aside / sidecar_path.name).write_text(json.dumps(sidecar, indent=1))
+                        amsg.unlink()
+                        sidecar_path.unlink(missing_ok=True)
+                    except OSError as move_error:
+                        # One pair that cannot be set aside must not stop the pass for every peer after it.
+                        print(f"⚠️ MACF: amail peer link: a refused pair {amsg.name} could not be set aside "
+                              f"({move_error}); it stays in the outbox", file=sys.stderr)
+                    if self.audit:
+                        self.audit.error(context="peer-link", detail=f"{domain}/{amsg.name}: {e}")
+                    entry.update(state="refused", reason=str(e))
+                else:
+                    amsg.unlink()
+                    sidecar_path.unlink(missing_ok=True)
+                    entry.update(state=outcome.state, reason="")
+                results.append(entry)
+        return results
+
+    # ----------------------------------------------------------- rung 2, receiving
+
+    def take_over_link(self, domain: str, stem: str, sidecar: Any, payload: bytes) -> Dict[str, Any]:
+        """Take custody of a pair a declared peer sent: write it, durably, into OUR peer intake
+        for that peer, and return the acknowledgement's fields (R56, R60).
+
+        Nothing here judges the mail. The intake is swept by `sweep_shared`, which hands each pair
+        to `accept_inbound` as a rung 1s pair is handled. What is checked is what makes the pair
+        storable and honest: a safe name, a sidecar naming the sender's own domain, and bytes that
+        match the hash the sidecar carries. A pair whose name is already held with the same bytes
+        is the acknowledgement lost on the way back, and is acknowledged again, not stored twice."""
+        root = self.config.inbound_handoff
+        if root is None:
+            raise DeliveryError("this broker has no hand-off root to take custody into")
+        if not isinstance(sidecar, dict) or not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", stem or ""):
+            raise PairRefused("the pair has no usable name or sidecar")
+        digest = hashlib.sha256(payload).hexdigest()
+        if sidecar.get("raw_sha256") != digest:
+            raise PairRefused("the payload does not match the hash its sidecar carries")
+        if str(sidecar.get("origin_domain", "")).lower() != domain.lower():
+            raise PairRefused("the sidecar names another origin than the declared peer")
+        intake = peer_intake(Path(root), domain)
+        intake.mkdir(parents=True, mode=0o700, exist_ok=True)
+        held = intake / f"{stem}.amsg"
+        half = intake / f"{stem}.json"
+        if held.exists() and hashlib.sha256(held.read_bytes()).hexdigest() == digest:
+            return {"message_id": sidecar.get("message_id"), "held": True}
+        if half.exists() and not held.exists():
+            # A take interrupted between the sidecar and the message leaves the sidecar alone. Whatever
+            # it holds, it is not a message, so it is removed and the pair is written afresh: a retry is
+            # then never refused for good by a name it can never write.
+            half.unlink()
+        # Written exclusively: a message already held under this name with OTHER bytes is a collision,
+        # and raises rather than being acknowledged, so the sender keeps its copy.
+        self._write_pair(intake, stem, sidecar, payload, gid=None)
+        for name in (f"{stem}.amsg", f"{stem}.json"):
+            fd = os.open(intake / name, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        dir_fd = os.open(intake, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+        return {"message_id": sidecar.get("message_id")}
+
     def _rung(self, recipient: str) -> str:
         if self.config.agent_for(recipient):
             return "local"
         if self.config.shared_for(recipient):
             return "shared"
+        if self.config.peer_link_for(recipient):
+            return "peer"
         return "relay"
 
     def _deliver_one(self, recipient: str, message: Message
@@ -1250,9 +1481,10 @@ class Broker:
             # Classified against THIS recipient's contact book, immediately
             # before the handoff. Two recipients may declare different keys for
             # the same sender, so the answer is per mailbox, not per message.
-            trust = self.classify_inbound(message, agent).value
+            at = _accepted_now()
+            trust = self.classify_inbound(message, agent, accepted_at=at).value
             message.trust = trust
-            self.hand_off(agent, message, trust)
+            self.hand_off(agent, message, trust, accepted_at=at.isoformat(timespec="seconds"))
             # Local handoff IS delivery: the message is in the recipient's
             # pickup box and only the recipient can move it from there.
             return DeliveryOutcome(rung="local", trust=trust,
@@ -1266,6 +1498,12 @@ class Broker:
             self.hand_off_shared(shared.domain, shared.local, shared.decl, message)
             return DeliveryOutcome(rung="shared", trust="",
                                    state="delivered", detail="")
+        route = self.config.peer_link_for(recipient)
+        if route:
+            # RUNG 2: the peer's listener, over a private network. The peer judges and stores;
+            # delivered means it said so after the pair was durably in its intake (R60), and
+            # anything less keeps the pair in our outbox for a retry (R61).
+            return self.hand_off_peer(route, message)
         # RUNG 3: the internet, via a transport that performs NO authorization.
         # Everything that decides whether this message may exist has already
         # run -- destination, rate limit, pre-send gate -- because a transport
@@ -1414,9 +1652,10 @@ class Broker:
         message.trust = None
 
         # PASSED — `signature` is the sender's own claim about its own message
-        # and is carried unchanged. It is PASSED rather than CHECKED on purpose:
-        # the broker cannot verify an outbound signature (it holds no private
-        # key, by design) and the recipient is the party who must. Its size is
+        # and is carried unchanged here. canonicalize() doesn't judge it: submit()
+        # does, against the operator's registry (R43), and the recipient judges
+        # it again at ingest (R44). Verifying needs only public keys, so holding
+        # no private key (by design) doesn't stop the broker checking. Its size is
         # bounded because an unbounded "signature" is an unbounded channel
         # wearing a cryptographic name — the same defect round 3 found in the
         # identifier fields.
@@ -1485,6 +1724,21 @@ class Broker:
                 self.audit.refused(sender=sender, recipients=[], reason=reason,
                                    message_id=message.message_id)
             return {"ok": False, "refused": [reason], "message_id": message.message_id}
+
+        # AN AGENT THE REGISTRY DECLARES SIGNS, OR ITS MAIL DOESN'T LEAVE (MIS-0004 R43). The
+        # broker holds no private key, but verifying needs only the public keys, which are the
+        # operator's registry. It applies the receiver's own rule (attest.sender_verdict, R44) at
+        # this acceptance, so a key rotated out is refused on new mail (R45) and the two sides
+        # never disagree on the same bytes. A sender the registry doesn't declare, and every
+        # sender while the registry can't be trusted, passes as unverified, the receiver's
+        # reading too: the landing declares first and enforces second (section 12.4).
+        unsigned = self._signature_refusal(message)
+        if unsigned is not None:
+            if self.audit:
+                self.audit.refused(sender=sender, recipients=message.to,
+                                   reason=unsigned, message_id=message.message_id)
+            self._record_fate(sender, message, "denied", unsigned)
+            return {"ok": False, "refused": [unsigned], "message_id": message.message_id}
 
         refusals = self._check(sender, message.to)
         if refusals:
@@ -1656,8 +1910,33 @@ class Broker:
         message.to = to
         return edited
 
+    def _signature_refusal(self, message: Message) -> Optional[str]:
+        """Why this submission is refused under R43, or None. Refused only when the registry
+        declares the sender's card and the message is unsigned or verifies against none of the
+        keys valid now; the reason is the verdict's own words."""
+        from .attest import sender_verdict
+        verdict = sender_verdict(message, self.sender_card(message), self.registry, _accepted_now())
+        if verdict.get("registry_trusted") is False:
+            # Not a refusal (see submit), but never silent: an untrusted registry means no agent
+            # is held to its keys until the operator repairs it.
+            print(f"⚠️ MACF: amail broker: {verdict['reason']}; signatures aren't enforced (R43)",
+                  file=sys.stderr)
+        if verdict.get("trust") != TrustClass.SUSPECT.value:
+            return None
+        return f"signature required (MIS-0004 R43): {verdict['reason']}"
+
+    def sender_card(self, message: Message) -> Optional[str]:
+        """The sender's calling card, resolved once here and written into the hand-off sidecar, so
+        the recipient judges the signature by the same card (MIS-0004 R44)."""
+        from .zone import card_for_address
+        return card_for_address(message.sender, domain=self.config.domain, zone=self.config.zone,
+                                agent_cards=self.config.agent_cards,
+                                peers={**{d: h.agents for d, h in self.config.shared_handoffs.items()},
+                                       **{d: link.agents for d, link in self.config.peer_links.items()}})
+
     def classify_inbound(self, message: Message, agent: str,
-                         domain_authenticated: bool = False) -> TrustClass:
+                         domain_authenticated: bool = False,
+                         accepted_at: Optional[datetime.datetime] = None) -> TrustClass:
         """What has actually been established about where this came from.
 
         `domain_authenticated` is supplied by the receiving MTA boundary — OUR
@@ -1673,30 +1952,23 @@ class Broker:
         only the DOMAIN — and the message that reads as a trusted human over an
         attacker-controlled address passes DMARC cleanly, because the attacker's
         domain genuinely is the attacker's domain.
+
+        THE SIGNATURE IS JUDGED AGAINST THE OPERATOR'S REGISTRY (MIS-0004 R44), by the same
+        :func:`attest.sender_verdict` the recipient applies at ingest, so the two never disagree on
+        the same bytes. *accepted_at* is this broker's acceptance, which it writes into the
+        sidecar as ``handed_off_at``; when omitted it is now, never "no record", since the broker
+        is accepting it now. A sender the registry declares is held to its keys; any other sender,
+        and every sender while the registry is missing or untrusted, is unverified, and nothing
+        falls back to the keys a contact book declares (R42). *agent* no longer changes the
+        answer: the registry is one declaration for every recipient.
         """
-        keys = self.contacts.keys_for(agent, message.sender) if self.contacts else []
-        if message.signature and keys:
-            if verify(message, message.signature, keys):
-                return TrustClass.ATTESTED
-            # A signature that fails is not the same as no signature. Someone
-            # went to the trouble of attaching one and it did not check out.
-            # Collapsing this into UNVERIFIED discards the only evidence that
-            # separates "we could not tell" from "we looked, and it did not add
-            # up" — and the second is the one worth waking someone for.
-            return TrustClass.SUSPECT
-        if message.signature and not keys:
-            # Signed by a correspondent who has declared no key. Nothing can be
-            # concluded, so nothing is: this is not SUSPECT (no check failed)
-            # and it is certainly not ATTESTED.
-            return TrustClass.DOMAIN_AUTH if domain_authenticated else TrustClass.UNVERIFIED
-        if keys and not message.signature:
-            # A correspondent who publishes a key and then sends unsigned mail
-            # is the shape of an impersonation: the attacker has the address but
-            # not the key, so the cheapest move is to simply omit the signature
-            # and hope nobody checks. Declaring a key is a commitment to using
-            # one, and mail that breaks the commitment is worth flagging.
-            return TrustClass.SUSPECT
-        return TrustClass.DOMAIN_AUTH if domain_authenticated else TrustClass.UNVERIFIED
+        from .attest import sender_verdict
+        verdict = sender_verdict(message, self.sender_card(message), self.registry,
+                                 accepted_at or _accepted_now())
+        trust = TrustClass(verdict["trust"])
+        if trust is TrustClass.UNVERIFIED and domain_authenticated:
+            return TrustClass.DOMAIN_AUTH
+        return trust
 
     def accept_inbound(self, message: Message, recipient: str,
                        via: str = "", *, rung: str = "shared",
@@ -1815,7 +2087,8 @@ class Broker:
         # The invariant this establishes, which is what the tests assert:
         #     verify(deserialize(stored_bytes)) == (stored.trust == ATTESTED)
         truncated = self._bound_fields(message)
-        message.trust = self.classify_inbound(message, agent).value
+        at = _accepted_now()
+        message.trust = self.classify_inbound(message, agent, accepted_at=at).value
         # AUTHORIZE FIRST, THEN DO THE EXPENSIVE WORK.
         #
         # The visibility checks below each scan and deserialise the recipient's
@@ -1899,7 +2172,8 @@ class Broker:
 
         # Same unified path: inbound peer mail is handed off, not written
         # across the boundary.
-        self.hand_off(agent, message, message.trust or "", via=held_via)
+        self.hand_off(agent, message, message.trust or "", via=held_via,
+                      accepted_at=at.isoformat(timespec="seconds"))
         if self.audit:
             self.audit.inbound(sender=message.sender, recipient=recipient,
                                message_id=message.message_id, decision="delivered",
@@ -1945,18 +2219,18 @@ class Broker:
         """
         results: List[Dict[str, Any]] = []
         root = self.config.inbound_handoff
-        if root is None or not self.config.shared_handoffs:
+        if root is None or not (self.config.shared_handoffs or self.config.peer_links):
             return results
         peers = Path(root) / "_peers"
         if not peers.is_dir():
             return results
-        declared = {d.lower() for d in self.config.shared_handoffs}
+        declared = {d.lower() for d in self.config.shared_handoffs} | {d.lower() for d in self.config.peer_links}
         for undeclared in sorted(p for p in peers.iterdir()
                                  if p.is_dir() and p.name.lower() not in declared):
             if undeclared.name not in self._warned_peers:
                 self._warned_peers.add(undeclared.name)
                 print(f"⚠️ MACF: {undeclared} is a peer intake for a domain this "
-                      f"deployment has not declared in shared_handoffs; leaving "
+                      f"deployment has not declared in shared_handoffs or peer_links; leaving "
                       f"it unread", file=sys.stderr)
         for dom in sorted(declared):
             intake = peers / dom
@@ -2021,8 +2295,11 @@ class Broker:
                           f"domain whose intake carried it; a peer may only "
                           f"speak for its own domain")
         try:
+            over_link = dom in {d.lower() for d in self.config.peer_links} and dom not in {
+                d.lower() for d in self.config.shared_handoffs}
             outcome = self.accept_inbound(message, recipient,
-                                         via=f"shared hand-off from {dom}", rung="shared",
+                                         via=(f"peer link from {dom}" if over_link else f"shared hand-off from {dom}"),
+                                         rung=("peer" if over_link else "shared"),
                                          keep_peer_id=True)
         except Exception as e:  # noqa: BLE001 - the pair must not vanish on an unexpected error
             return reject(f"{type(e).__name__}: {e}")
@@ -2053,6 +2330,43 @@ class Broker:
     # These exist so the CLI has a path that is not `import store`. A read that
     # bypasses the broker leaves no audit trace and answers to no allowlist —
     # the framework's own tooling was the first thing doing it.
+
+    def message_state(self, agent: str, message_id: Any) -> Dict[str, Any]:
+        """The latest receipt state of one message *agent* sent, by its id (MIS-0004 R24,
+        state_MUST_be_queryable_by_id).
+
+        Read from the disposition record, the same broker-owned file a sender can also read by
+        filesystem when no broker runs: one record, two ways to reach it. Each recipient's latest
+        state comes back with its detail and time, and `state` is the message-level view derived
+        from them as the sender's own reader derives it.
+
+        A message another agent sent answers exactly as an unknown id does, `found: false`, so the
+        reply doesn't tell one agent which ids another holds (R12). An id that isn't a broker id is
+        refused, since it would otherwise name a path."""
+        from .client import derive_message_state
+        if not isinstance(message_id, str) or not _ID_RE.match(message_id):
+            return {"ok": False, "error": f"{message_id!r} is not a message id this broker mints"}
+        if self.config.dispositions_dir is None:
+            return {"ok": False, "error": "this broker keeps no disposition records, so it has no state to give"}
+        f = Path(self.config.dispositions_dir) / f"{message_id}.json"
+        try:
+            rec = json.loads(f.read_text())
+        except FileNotFoundError:
+            rec = None
+        except (OSError, ValueError) as e:
+            print(f"⚠️ MACF: disposition record {f.name} is unreadable ({e}); its state is unknown, "
+                  "not reported as any state", file=sys.stderr)
+            return {"ok": False, "error": f"the record for {message_id} can't be read ({type(e).__name__})"}
+        if not isinstance(rec, dict) or rec.get("agent") != agent:
+            return {"ok": True, "message_id": message_id, "found": False, "state": None, "recipients": {}}
+        latest = {}
+        for addr, entry in (rec.get("recipients") or {}).items():
+            history = (entry or {}).get("history") or []
+            if history:
+                last = history[-1]
+                latest[addr] = {"state": last.get("state"), "detail": last.get("detail", ""), "at": last.get("at")}
+        return {"ok": True, "message_id": message_id, "found": True,
+                "state": derive_message_state(rec), "recipients": latest}
 
     def status_counts(self, agent: str) -> Dict[str, Any]:
         """Counts of the BROKER's stores scoped to this agent — nothing else.
@@ -2108,7 +2422,7 @@ class Broker:
                     continue
                 try:
                     age = now - entry.lstat().st_mtime
-                except FileNotFoundError:
+                except FileNotFoundError:  # noqa: S112 - the entry was ingested between the listing and the stat, a normal race in which it correctly does not count as pending
                     continue  # ingested between the listing and the stat
                 pending_pickup += 1
                 oldest_pending_s = max(oldest_pending_s or 0.0, age)
@@ -2148,6 +2462,24 @@ class Broker:
         # The age stays out of `counts` for the budget's reason: it is summed for the audit total.
         return {"ok": True, **counts, "budget": budget,
                 "oldest_pending_s": None if oldest_pending_s is None else round(oldest_pending_s)}
+
+    def contact_entries(self, agent: str) -> Dict[str, Any]:
+        """The correspondents this broker would check for *agent*: address and direction, nothing else.
+
+        The broker answers, not the file, so an agent sees exactly what is enforced, including a
+        change made since it last asked (amail policy 4.1). Scoped to the caller by the kernel-
+        established identity, as `status_counts` is: the request names no agent. An unmapped agent
+        is refused, and a broker with no contact list answers an empty list and says so, since an
+        empty answer there is a fact about the deployment and not a refusal."""
+        if agent not in self.config.agent_homes:
+            raise PermissionError(
+                f"'{agent}' has no provisioned mailbox; refusing the read. "
+                "Reaching the socket is not authorization."
+            )
+        entries = [] if self.contacts is None else self.contacts.entries_for(agent)
+        if self.audit:
+            self.audit.read(agent=agent, operation="contacts", count=len(entries))
+        return {"ok": True, "contacts": entries, "contact_list": self.contacts is not None}
 
     def identify(self, conn: socket.socket) -> "Identity":
         """Authenticate the connecting process from kernel-supplied credentials.
@@ -2435,12 +2767,22 @@ MAX_REQUEST_BYTES = 1 << 20  # 1 MiB
 CONNECTION_TIMEOUT = 30.0
 
 
+def _peer_closed_without_request(conn) -> bool:
+    """True when the peer hung up and sent no byte: a probe, not a request."""
+    try:
+        conn.settimeout(0.2)
+        return conn.recv(1, socket.MSG_PEEK) == b""
+    except OSError:
+        return False
+
+
 class _Handler(socketserver.StreamRequestHandler):
     timeout = CONNECTION_TIMEOUT
 
     def handle(self) -> None:
         broker: Broker = self.server.broker  # type: ignore[attr-defined]
         resp: Dict[str, Any]
+        version_note = ""
         try:
             # IDENTITY COMES FROM THE KERNEL, NOT THE PAYLOAD.
             #
@@ -2450,7 +2792,19 @@ class _Handler(socketserver.StreamRequestHandler):
             # reachable set would become the union of everyone's contacts, and the
             # audit log would blame the impersonated agent. SO_PEERCRED is supplied
             # by the kernel about the connected process and cannot be forged by it.
-            who = broker.identify(self.connection)
+            try:
+                who = broker.identify(self.connection)
+            except PermissionError:
+                # A peer that connected and closed without sending anything
+                # (a client's "is anyone there?" probe) submitted nothing, so
+                # there is nothing to refuse and nobody to answer. On macOS the
+                # kernel no longer answers for a closed peer (ENOTCONN), which
+                # used to write a refused-submission error and a broken-pipe
+                # error into the audit for every probe. A peer still connected
+                # is refused as before.
+                if _peer_closed_without_request(self.connection):
+                    return
+                raise
 
             # A TOTAL deadline, not a per-recv one. socket timeout resets on
             # every byte received, so a one-byte-per-second trickle holds a
@@ -2472,6 +2826,16 @@ class _Handler(socketserver.StreamRequestHandler):
             if not raw:
                 return
             req = json.loads(raw.decode("utf-8"))
+            # THE PROTOCOL VERSION (MIS-0004 R35). Checked before anything is
+            # read from the request, so a client on another build is refused
+            # with the versions this broker speaks rather than half-understood.
+            accepted, note = socket_protocol.check(req.get("v"))
+            if not accepted:
+                raise ValueError(note)
+            # Only an accepted request in a superseded version carries a note
+            # forward: a refusal's reason belongs in its error, never in
+            # `deprecated`, where it would read as "served, but update soon".
+            version_note = note
             # The kernel named the uid; the claim settles the rest. On an
             # unshared uid a disagreeing claim is refused and recorded; on a
             # uid the host tier declares shared the claim is the identity
@@ -2499,6 +2863,10 @@ class _Handler(socketserver.StreamRequestHandler):
                 resp = broker.submit(sender, msg)
             elif op == "status":
                 resp = broker.status_counts(sender)
+            elif op == "contacts":
+                resp = broker.contact_entries(sender)
+            elif op == "state":
+                resp = broker.message_state(sender, req.get("message_id"))
             else:
                 # Named rather than ignored: a client asking for an operation
                 # this broker does not have is a version skew or an intention,
@@ -2518,6 +2886,11 @@ class _Handler(socketserver.StreamRequestHandler):
                 broker.audit.error(context="request",
                                    detail=f"{type(e).__name__}: {e}",
                                    sender=(sender if "sender" in dir() else (who if "who" in dir() and who else None)))
+        # Every reply says which version answered it, refusals included, so a
+        # client can tell a skew from any other error.
+        resp.setdefault("v", socket_protocol.VERSION)
+        if version_note:
+            resp.setdefault("deprecated", version_note)
         try:
             self.wfile.write((json.dumps(resp) + "\n").encode("utf-8"))
         except OSError as e:
@@ -2667,7 +3040,7 @@ class _Server(socketserver.ThreadingUnixStreamServer):
                               f"per agent ({MAX_CONCURRENT_CONNECTIONS} total). "
                               "The message was NOT sent. Retry."),
                 }) + "\n").encode("utf-8"))
-            except OSError:
+            except OSError:  # noqa: S110 - the refused client has usually gone already, and under a connection flood a warning per refusal would bury the broker's log; the refusal itself is what protects the broker
                 pass
             self.shutdown_request(request)
             return

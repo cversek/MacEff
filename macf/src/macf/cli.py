@@ -27,6 +27,7 @@ from .utils import (
     get_macf_package_path,
     get_hooks_dir,
     get_total_context,
+    get_total_context_and_source,
 )
 from .modes import detect_auto_mode
 from .utils.environment import current_model, detect_model
@@ -303,7 +304,7 @@ def cmd_env(args: argparse.Namespace) -> int:
             print(f"⚠️ MACF: path resolution failed: {e}", file=sys.stderr)
             return str(p) if p else "(not set)"
 
-    from macf.utils.paths import detect_cc_binary
+    from macf.utils.paths import detect_cc_binary, detect_cc_running, describe_cc_running
     _detect_cc_binary = detect_cc_binary
 
     # Get agent identity
@@ -356,7 +357,8 @@ def cmd_env(args: argparse.Namespace) -> int:
             "model": (_model := current_model())["id"],
             "model_display": _model["display"],
             "model_source": _model["source"],
-            "context_window": f"{get_total_context():,}",
+            "context_window": f"{(_window := get_total_context_and_source())[0]:,}",
+            "context_window_source": _window[1],
             "python_path": sys.executable,
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         },
@@ -374,6 +376,7 @@ def cmd_env(args: argparse.Namespace) -> int:
         },
         "cc_internal": {
             "cc_binary": _detect_cc_binary(),
+            "cc_running": describe_cc_running(_detect_cc_binary(), detect_cc_running()),
             "cc_project_dir": resolve_path(cc_project_dir),
             "cc_tasks_dir": resolve_path(cc_tasks_dir)
         },
@@ -445,7 +448,9 @@ def cmd_env(args: argparse.Namespace) -> int:
         print(f"  Claude Code:  {data['versions']['claude_code']}")
         _v = data['versions']
         print(f"  Model:        {_v.get('model_display', _v['model'])} ({_v['model']}, from {_v.get('model_source', '?')})")
-        print(f"  Context:      {data['versions']['context_window']} tokens")
+        from macf.utils.tokens import UNVERIFIED_CONTEXT_NOTE
+        _assumed = f" ({UNVERIFIED_CONTEXT_NOTE})" if _v.get("context_window_source") == "default" else ""
+        print(f"  Context:      {data['versions']['context_window']} tokens{_assumed}")
         print(f"  Python:       {data['versions']['python_path']} ({data['versions']['python_version']})")
         print()
 
@@ -464,7 +469,8 @@ def cmd_env(args: argparse.Namespace) -> int:
         print()
 
         print("Claude Code Internal")
-        print(f"  CC Binary:      {data['cc_internal']['cc_binary']}")
+        print(f"  CC Installed:   {data['cc_internal']['cc_binary']}")
+        print(f"  CC Running:     {data['cc_internal']['cc_running']}")
         print(f"  CC Project Dir: {data['cc_internal']['cc_project_dir']}")
         print(f"  CC Tasks Dir:   {data['cc_internal']['cc_tasks_dir']}")
         print()
@@ -570,8 +576,8 @@ def cmd_budget(_: argparse.Namespace) -> int:
     if used is not None:
         try:
             payload["used"] = float(used)
-        except ValueError:
-            pass
+        except ValueError as e:
+            print(f"⚠️ MACF: MACEFF_TOKEN_USED is not a number (ignoring it): {e}", file=sys.stderr)
     print(json.dumps(payload, indent=2))
     return 0
 
@@ -624,6 +630,34 @@ def cmd_mis_check(args: argparse.Namespace) -> int:
     return 1 if findings else 0
 
 
+def cmd_mis_index(args: argparse.Namespace) -> int:
+    """The registry of MIS files, from their own headers (#1066)."""
+    from pathlib import Path
+    from macf import mis
+    paths = [Path(x) for x in (args.paths or ["framework/mis"])]
+    missing = [str(x) for x in paths if not x.exists()]
+    if missing:
+        print(f"❌ not found: {', '.join(missing)}", file=sys.stderr)
+        return 2
+    rows = mis.index(paths)
+    if not getattr(args, "open", False):
+        print(json.dumps(rows, indent=2) if args.json else mis.format_index(rows))
+        return 0
+    try:
+        drafts = mis.open_index(mis.gh_runner())
+    except (RuntimeError, OSError, ValueError, KeyError) as e:
+        print(f"❌ the open MIS pull requests could not be read: {e}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"landed": rows, "open": drafts}, indent=2))
+        return 0
+    print(mis.format_index(rows))
+    print("\nOpen, from pull requests (drafts; not landed):")
+    for r in drafts:
+        print(f"MIS-{r['number']:<5}{r['status'] or '?':<10}{r['title']}  (PR #{r['pr']}{', draft' if r['draft'] else ''})")
+    return 0
+
+
 def cmd_budget_status(args: argparse.Namespace) -> int:
     from macf import budget
     def go() -> int:
@@ -664,6 +698,20 @@ def cmd_permissions_history(args: argparse.Namespace) -> int:
     from macf import permission_watch as pw
     dialogs = pw.read_history(args.days, include_questions=args.include_questions)
     print(pw.history_json(dialogs) if args.json else pw.history_text(dialogs, by_rule=args.by_rule))
+    return 0
+
+
+def cmd_permissions_how(args: argparse.Namespace) -> int:
+    """How each recent tool call was approved, derived from the event log and today's rules (#1060)."""
+    from dataclasses import asdict
+    from pathlib import Path
+    from macf import permission_watch as pw
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    if args.last < 1:     # rows[-0:] would be every row, the opposite of what was asked
+        print("❌ --last takes a count of 1 or more", file=sys.stderr)
+        return 2
+    rows = pw.read_approvals(args.days, home=Path.home(), project_dir=project)[-args.last:]
+    print(json.dumps([asdict(a) for a in rows], indent=2) if args.json else pw.approvals_text(rows))
     return 0
 
 
@@ -762,6 +810,32 @@ def cmd_budget_log(args: argparse.Namespace) -> int:
         print(budget.format_log(budget.samples(since=since)))
         return 0
     return _budget_run(go)
+
+
+def cmd_budget_me(args: argparse.Namespace) -> int:
+    from macf import usage_meter
+    try:
+        print(usage_meter.run_me(args.since))
+    except ValueError as e:
+        print(f"budget me: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_budget_ticks(args: argparse.Namespace) -> int:
+    from macf import usage_ticks
+    try:
+        print(usage_ticks.run_ticks(args.since))
+    except ValueError as e:
+        print(f"budget ticks: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_budget_rate(args: argparse.Namespace) -> int:
+    from macf import usage_share
+    print(usage_share.run_rate(args.window))
+    return 0
 
 
 def cmd_budget_mode_set(args: argparse.Namespace) -> int:
@@ -1005,6 +1079,19 @@ def _hooks_to_install_list():
     ]
 
 
+def _hook_interpreter() -> str:
+    """The interpreter a host's hook commands run under: the one running this installer, quoted
+    for the shell that runs the command, by its absolute path.
+
+    A bare ``python`` resolves to whatever the shell finds first. With the README's own virtual
+    environment install that is the system interpreter, which can't import ``macf``, so every
+    hook failed with ``ModuleNotFoundError`` at the first session after ``framework install``
+    (#860 item 6). The interpreter that ran the installer is the one that has ``macf``, as the
+    container's hooks and the daemon's declaration already name theirs."""
+    import shlex
+    return shlex.quote(sys.executable)
+
+
 def cmd_hook_install(args: argparse.Namespace) -> int:
     """Install consciousness hooks with local/global mode selection.
 
@@ -1081,14 +1168,14 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
                 # Host global: write the absolute home path. ~ expansion is
                 # shell-dependent and CC's hook exec model isn't documented to
                 # guarantee it; absolute removes the assumption.
-                hooks_prefix = f"python {Path.home()}/.claude/hooks"
+                hooks_prefix = f"{_hook_interpreter()} {Path.home()}/.claude/hooks"
         else:
             # Local mode (host only - container always uses global).
             # Resolve to canonical absolute path so symlinked project trees,
             # relative invocations, and CWD-shifts all hit the same hooks dir.
             hooks_dir = Path.cwd() / ".claude" / "hooks"
             settings_file = Path.cwd() / ".claude" / "settings.local.json"
-            hooks_prefix = f"python {hooks_dir.resolve()}"
+            hooks_prefix = f"{_hook_interpreter()} {hooks_dir.resolve()}"
 
         # Create hooks directory
         hooks_dir.mkdir(parents=True, exist_ok=True)
@@ -1458,7 +1545,7 @@ def cmd_config_init(args: argparse.Namespace) -> int:
 
     print(f"\n✅ Configuration created: {config_file}")
     print(f"   Agent moniker: {moniker}")
-    print(f"   Logging paths: /tmp/macf_hooks/{moniker}/{{session_id}}/")
+    print(f"   Logging paths: <session root>/{moniker}/{{session_id}}/ (your runtime directory; MACF_SESSION_ROOT moves it)")
 
     return 0
 
@@ -1660,9 +1747,10 @@ def cmd_statusline(args: argparse.Namespace) -> int:
                 stdin_data = sys.stdin.read().strip()
                 if stdin_data:
                     cc_json = json.loads(stdin_data)
-            except (json.JSONDecodeError, Exception):
-                # Ignore stdin parsing failures - use MACF data only
+            except json.JSONDecodeError:  # noqa: S110 - non-JSON stdin is normal when the statusline is run by hand, and MACF data is used instead
                 pass
+            except Exception as e:  # noqa: BLE001 - GUARD: a statusline refresh must neither fail nor write to stderr, so a real fault reading stdin is recorded where it can be found (#999)
+                append_event("statusline_stdin_fault", {"error": f"{type(e).__name__}: {e}"})
 
         # Gather statusline data
         data = get_statusline_data(cc_json=cc_json)
@@ -1856,7 +1944,7 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
     and broke with "no sessions". The name is matched against every agent this endpoint
     and its declared remotes list (utils/roster.py); an agent on a remote is handed off
     to that remote's own ``harness attach --card``, which resolves it from its own daemon
-    (persistent_layer 4.1, 4.5). The decision is utils/attach_dispatch.py's.
+    (persistent_layer 9.1, 9.5). The decision is utils/attach_dispatch.py's.
     """
     from .pd.session_unit import client_environment
     from .utils.attach import plan_attach_for_card, plan_attach_for_home
@@ -1919,6 +2007,22 @@ def cmd_harness_attach(args: argparse.Namespace) -> int:
         if decision.exit_code is not None:
             print(decision.message, file=sys.stderr)
             return decision.exit_code
+        from .utils.attach_dispatch import control_refusal
+        refused = control_refusal(decision.argv)
+        if refused and getattr(args, "control", None) is not True and entry is not None:
+            # Control mode came from the declared default (`control: true`), not from the flag: this terminal
+            # can't use it, so attach plainly and say so, rather than refuse a command that asked for nothing.
+            print(f"⚠️ MACF: {refused.split(' Attach')[0]} Attaching without it.", file=sys.stderr)
+            decision = decide(entry, remotes, control=False, read_only=getattr(args, "read_only", False),
+                              plan_for_home=plan_attach_for_home, plan_for_card=plan_attach_for_card,
+                              has_session=has_session, environment=client_environment)
+            if decision.exit_code is not None:
+                print(decision.message, file=sys.stderr)
+                return decision.exit_code
+            refused = control_refusal(decision.argv)
+        if refused:
+            print(f"❌ {refused}", file=sys.stderr)
+            return 2
         env = decision.env or dict(os.environ)
         for command in decision.before:
             # Naming the window is a courtesy: a tmux that refuses it still attaches.
@@ -1993,7 +2097,7 @@ def cmd_harness_unit(args: argparse.Namespace) -> int:
 
 def cmd_harness_cutover(args: argparse.Namespace) -> int:
     """Print the plan for moving the agent's session onto its primal daemon (persistent_layer
-    6.3). Read-only: exit 0 when every check holds, 1 when one doesn't or there is nothing
+    5.2). Read-only: exit 0 when every check holds, 1 when one doesn't or there is nothing
     to move, 2 when the agent can't be resolved."""
     import dataclasses
     from pathlib import Path
@@ -2009,7 +2113,7 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
     card = calling_card_from_identifier(agent)
     # Without --home, the agent home as `macf_tools env` finds it, not the login's ~: on a host
     # the two differ, and a plan built for ~ finds neither the staged declaration nor the
-    # hand-started client it must stop (persistent_layer 6.3).
+    # hand-started client it must stop (persistent_layer 5.2).
     from .utils.paths import find_agent_home
     home = Path(args.home) if getattr(args, "home", None) else find_agent_home()
     import os
@@ -2017,7 +2121,8 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
     from .platform.launchd import cutover_label
     try:
         plan = build_plan(home, card, agent, host_probes(home, card),
-                          staged=Path(args.staged) if getattr(args, "staged", None) else None)
+                          staged=Path(args.staged) if getattr(args, "staged", None) else None,
+                          accept_no_linger=bool(getattr(args, "accept_no_linger", False)))
     except Exception as e:  # noqa: BLE001 - the one-shot job must remove itself whatever failed
         job_plist = Path(args.job_plist) if getattr(args, "job_plist", None) else None
         said = str(e) if isinstance(e, ProbeUnavailable) else f"{type(e).__name__}: {e}"
@@ -2074,9 +2179,16 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
             print(format_plan(plan))
             print("\n⚠️ MACF: harness cutover --run: not ready, so nothing was started", file=sys.stderr)
             return 1
+        staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
+        # A staged file made before the card revision names its agent in the old form. The plan
+        # accepted it, and the move installs what it finds, so it is rewritten first (#919).
+        from .pd.core import cutover_declaration
+        kept = cutover_declaration(home, card, path=staged)
+        if kept is not None:
+            print(f"the staged declaration named {card} in the old form; rewritten in place, "
+                  f"the original kept at {kept} (MIS-0002-R165)")
         if plan.init == "launchd":
             import os
-            staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
             try:
                 plist, log_path = arm_launchd(agent, card, home, staged, sys.executable, os.getuid(),
                                               f"{datetime.now():%Y%m%d-%H%M%S}")
@@ -2093,7 +2205,8 @@ def cmd_harness_cutover(args: argparse.Namespace) -> int:
         log_path = home / ".maceff" / "logs" / f"cutover-{datetime.now():%Y%m%d-%H%M%S}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         staged = Path(args.staged) if getattr(args, "staged", None) else staged_path(home)
-        argv = arm_argv(agent, home, staged, log_path, sys.executable)
+        argv = arm_argv(agent, home, staged, log_path, sys.executable,
+                        accept_no_linger=bool(getattr(args, "accept_no_linger", False)))
         started = subprocess.run(argv, capture_output=True, text=True)
         if started.returncode != 0:
             print(f"⚠️ MACF: harness cutover --run: the transient unit didn't start: "
@@ -2742,7 +2855,8 @@ def other_claude_md_in_load_path(reconciled_path):
     for c in candidates:
         try:
             rc = c.resolve()
-        except OSError:
+        except OSError as e:
+            print(f"⚠️ MACF: could not resolve {c} (skipping it): {e}", file=sys.stderr)
             continue
         if rc == reconciled or rc in seen or not c.exists():
             continue
@@ -3699,11 +3813,16 @@ def cmd_policy_recommend(args: argparse.Namespace) -> int:
         return 1
 
     from .utils.manifest import policies_newer_than_index
-    from .utils.paths import find_agent_home
-    stale = policies_newer_than_index(find_agent_home() / ".maceff" / "policy_index.lance")
+    from .utils.recommend import get_policy_db_path
+    stale = policies_newer_than_index(get_policy_db_path())
     if stale:
+        # The warm search service keeps the index it loaded, so a rebuild alone leaves it
+        # answering from the old one (#898).
         print(f"⚠️ {len(stale)} policies changed since the index was built ({', '.join(stale[:3])}"
-              f"{', ...' if len(stale) > 3 else ''}). Rebuild: macf_tools policy build_index", file=sys.stderr)
+              f"{', ...' if len(stale) > 3 else ''}). Rebuild: macf_tools policy build_index, then "
+              f"restart the search service, which keeps the index it loaded: where a primal daemon "
+              f"runs it, restart its `search` unit (the tray's Restart); otherwise "
+              f"macf_tools search-service stop, then start", file=sys.stderr)
 
     # Try warm service first (fast path)
     result = query_search_service("policy", query, limit=limit, timeout_s=1.0)
@@ -3822,6 +3941,14 @@ def cmd_policy_build_index(args: argparse.Namespace) -> int:
             db_path=db_path,
             extra_roots=extra_roots,
         )
+        # What the index holds, by content, so its staleness check isn't fooled by a checkout's
+        # new mtimes (#898). An index built from a named directory holds something other than the
+        # agent's roots, so it records nothing, and its staleness is judged by time.
+        if not args.policies_dir:
+            from .utils.manifest import record_index_build
+            if not record_index_build(db_path):
+                print("⚠️ MACF: the index's contents could not be recorded in the event log; "
+                      "its staleness will be judged by time", file=sys.stderr)
 
         # Output
         if json_output:
@@ -4079,8 +4206,8 @@ def cmd_mode_set_work(args: argparse.Namespace) -> int:
                     })
             except Exception as e:
                 print(f"⚠️ MACF: PLAY_TIME mode_transitions update failed: {e}", file=sys.stderr)
-    except (ImportError, OSError, ValueError):
-        pass
+    except (ImportError, OSError, ValueError) as e:
+        print(f"⚠️ MACF: PLAY_TIME transition recording skipped (mode change not recorded on the play-time task): {e}", file=sys.stderr)
 
     return 0
 
@@ -4954,10 +5081,11 @@ def cmd_task_list(args: argparse.Namespace) -> int:
 
     # Apply archive visibility filters (before other filters)
     # By default, hide archived tasks unless --all or --archived is specified
+    from .task.archive import is_archived
     if args.show_archived_only:
-        tasks = [t for t in tasks if t.status == "archived"]
+        tasks = [t for t in tasks if is_archived(t)]
     elif not args.show_all:
-        tasks = [t for t in tasks if t.status != "archived"]
+        tasks = [t for t in tasks if not is_archived(t)]
 
     # Apply filters
     if args.type_filter:
@@ -5214,14 +5342,14 @@ def get_display_mtime(tasks_dir) -> float:
     try:
         from .roles.hooks import roles_store_mtime
         latest = max(latest, roles_store_mtime())
-    except (OSError, ImportError, ValueError):
+    except (OSError, ImportError, ValueError):  # noqa: S110 - polled each redraw; store-only detection is the fallback
         pass  # no roles store: store-only detection
     try:
         from .agent_events_log import get_log_path
         log_path = get_log_path()
         if log_path and log_path.exists():
             latest = max(latest, _display_events_mtime(log_path))
-    except (OSError, ImportError):
+    except (OSError, ImportError):  # noqa: S110 - polled on every redraw tick, so a warning here would corrupt the live frame; store-only detection is the fallback
         pass  # event log unreadable: fall back to store-only detection
     return latest
 
@@ -5253,15 +5381,31 @@ def _display_events_mtime(log_path) -> float:
         st.update(path=str(log_path), offset=max(0, size - 65536), mtime=0.0)
     if size == st["offset"]:
         return st["mtime"]
+    start = st["offset"]
     with open(log_path, "rb") as f:
-        f.seek(st["offset"])
-        chunk = f.read(size - st["offset"])
-    st["offset"] = size
+        # A read that starts mid-file begins with a fragment of a line unless the
+        # byte before it is a newline; that fragment is not a record to parse.
+        mid_line = False
+        if start > 0:
+            f.seek(start - 1)
+            mid_line = f.read(1) != b"\n"
+        f.seek(start)
+        chunk = f.read(size - start)
+    # Advance only past the last complete line: a line still being written is
+    # read whole on the next poll instead of failing to parse and being lost.
+    end = chunk.rfind(b"\n")
+    if end < 0:
+        return st["mtime"]
+    st["offset"] = start + end + 1
+    lines = chunk[:end + 1].splitlines()
+    if mid_line:
+        lines = lines[1:]
     file_mtime = log_path.stat().st_mtime
-    for line in chunk.splitlines():
+    for line in lines:
         try:
             ev = _json.loads(line)
-        except ValueError:
+        except ValueError as e:
+            print(f"⚠️ MACF: display event log line unparseable (skipped, display may miss that event): {e}", file=sys.stderr)
             continue
         name = str(ev.get("event", ""))
         if name.startswith(_DISPLAY_EVENT_PREFIXES):
@@ -5469,6 +5613,19 @@ def cmd_task_roles(args: argparse.Namespace) -> int:
     return 0
 
 
+_PARENT_MARKER = re.compile(r"(?:\x1b\[[0-9;]*m)?\[\^#\d+\](?:\x1b\[[0-9;]*m)?\s*")
+
+
+def _without_parent_marker(subject: str) -> str:
+    """A subject without its `[^#N]` parent marker, for the tree.
+
+    The marker exists so Claude Code's flat task list can show a child's
+    parent; in the tree the indentation already says it, so it is noise there.
+    The stored subject keeps it.
+    """
+    return _PARENT_MARKER.sub("", subject or "")
+
+
 def cmd_task_tree(args: argparse.Namespace) -> int:
     """Display task hierarchy tree from a root task."""
     from .task.create import subject_with_live_parent
@@ -5477,7 +5634,28 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
     from .task import TaskReader
 
     succinct = getattr(args, 'succinct', False)
-    verbose = getattr(args, 'verbose', False)
+    # Verbosity: 0 = notes counted on the task line; 1 (-v, --verbose) = notes,
+    # plans and reports listed and truncated; 2 (-vv, --verbose 2) = every
+    # note, plan, report, breadcrumb and update in full, wrapped to 80% of the
+    # terminal. `verbose` may be a bool from older callers.
+    _v = getattr(args, 'verbose', 0)
+    level = 1 if _v is True else int(_v or 0)
+    # `--verbose` takes an optional LEVEL, so argparse hands it the next word
+    # even when that word is a task id (`task tree --verbose 892`, which worked
+    # before levels existed). A word that is not 1 or 2 is the root task when
+    # no root was given; otherwise it is a bad level, refused by name.
+    _lv = getattr(args, 'verbose_level', None)
+    if _lv is not None:
+        _lv = str(_lv)
+        if _lv in ("1", "2"):
+            level = max(level, int(_lv))
+        elif str(getattr(args, 'task_id', '000')) == "000":
+            args.task_id = _lv
+            level = max(level, 1)
+        else:
+            print(f"❌ --verbose LEVEL must be 1 or 2, not {_lv!r}")
+            return 2
+    verbose = level >= 2
     # Title width: succinct mode is a scanning view, so it trims harder. An
     # explicit --title-width overrides both defaults; 0 disables truncation.
     title_width = getattr(args, 'title_width', None)
@@ -5507,15 +5685,22 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         from .task.scope import get_scope_state
         scope_state = get_scope_state()
 
-        # Archive filtering (default: hide archived)
-        def is_archived(task):
-            return task.mtmd and getattr(task.mtmd, 'archived', False)
-
+        # Archived work (status `archived`, or the legacy MTMD flag). Default:
+        # each archived subtree is ONE 📦 line; --succinct: not drawn at all;
+        # --all: drawn expanded; --archived: only archived tasks, with the
+        # ancestors that give them a path to the root.
+        from .task.archive import is_archived
+        collapse_archived = not (show_all or show_archived_only)
         if show_archived_only:
-            all_tasks = [t for t in all_tasks if is_archived(t)]
-        elif not show_all:
-            all_tasks = [t for t in all_tasks if not is_archived(t)]
-        # else show_all: no filtering
+            _by_id = {t.id: t for t in all_tasks}
+            _keep = {root_id}
+            for t in all_tasks:
+                if is_archived(t):
+                    node, hops = t, 0
+                    while node is not None and node.id not in _keep and hops < 1000:
+                        _keep.add(node.id)
+                        node, hops = _by_id.get(str(node.parent_id)) if node.parent_id else None, hops + 1
+            all_tasks = [t for t in all_tasks if t.id in _keep]
 
         task_map = {t.id: t for t in all_tasks}
 
@@ -5537,6 +5722,28 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         def get_children(parent_id):
             target = str(parent_id) if parent_id is not None else None
             return list(children_of.get(target, ()))
+
+        _live_cache = {}
+
+        def has_live(task, _seen=None):
+            """True when this task or any descendant is NOT archived (cycle-safe)."""
+            if task.id in _live_cache:
+                return _live_cache[task.id]
+            _seen = set() if _seen is None else _seen
+            if task.id in _seen:
+                return False
+            _seen.add(task.id)
+            live = (not is_archived(task)) or any(has_live(c, _seen) for c in get_children(task.id))
+            _live_cache[task.id] = live
+            return live
+
+        def count_archived_below(task_id, _seen=None):
+            _seen = set() if _seen is None else _seen
+            if task_id in _seen:
+                return 0
+            _seen.add(task_id)
+            return sum(int(is_archived(c)) + count_archived_below(c.id, _seen)
+                       for c in get_children(task_id))
 
         def has_active_sibling(task, siblings):
             """Check if any sibling is active (in_progress or pending)."""
@@ -5560,7 +5767,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             could clear by exiting and re-entering, and no amount of exiting
             would have cleared it.
             """
-            if not is_terminal_status(task.status):
+            if not (is_terminal_status(task.status) or is_archived(task)):
                 return False
             # Same cycle guard as count_descendants: a self-parenting task is
             # malformed but reachable, and must not take the render down.
@@ -5579,6 +5786,12 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             renders an in-progress parent as a bare line with nothing under it,
             which reads as "nothing was done here" — the opposite of the truth.
             """
+            # Archived work: in --succinct it is not drawn unless it is the
+            # only path to something still open; otherwise it is drawn (as one
+            # collapsed line by default). Checked before the recency marker so
+            # archiving a task does not pull it back into view.
+            if collapse_archived and is_archived(task):
+                return has_live(task) if succinct else True
             if not succinct:
                 return True
             # Always show root sentinel (depth 0)
@@ -5708,7 +5921,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             return " ".join(parts) if parts else ""
 
         def print_task_details(task, detail_prefix):
-            """Print plan and notes for a task."""
+            """Print plan, notes and reports for a task at the current verbosity level."""
             if succinct:
                 return
 
@@ -5722,45 +5935,65 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
             def fmt_green(text):
                 return f"{ANSI_GREEN}{text}{ANSI_RESET}"
 
+            import shutil
+            import textwrap
+            wrap_width = max(40, int(shutil.get_terminal_size(fallback=(100, 24)).columns * 0.8))
+
+            def emit(lead, text, style=fmt):
+                """Full text at level 2, wrapped so every line fits 80% of the terminal."""
+                # The lead's emoji draws two columns wide; leave room for it.
+                avail = max(20, wrap_width - len(detail_prefix) - len(lead) - 1)
+                pad = " " * (len(lead) + 1)
+                for i, part in enumerate(textwrap.wrap(text.replace("\n", " "), avail) or [""]):
+                    print(f"{detail_prefix}{style((lead if i == 0 else pad) + part)}")
+
             plan, plan_ca_ref = get_task_plan(task)
+
+            # At level 0 a subtask's plan line is left out: its parent's plan
+            # already says where the work is planned. A GitHub issue or PR keeps
+            # its line at any depth, because that line is its link.
+            task_type = getattr(task.mtmd, "task_type", None) if task.mtmd else None
+            is_subtask = str(task.parent_id or "000").lstrip("#") not in ("000", "null", "None")
+            if level == 0 and is_subtask and task_type not in ("GH_ISSUE", "GH_PR"):
+                plan = plan_ca_ref = None
 
             # Show plan_ca_ref or plan
             if plan_ca_ref:
                 if verbose:
-                    print(f"{detail_prefix}{fmt('📄 ' + plan_ca_ref)}")
+                    emit("📄 ", plan_ca_ref)
                 else:
                     print(f"{detail_prefix}{fmt('→ ' + truncate(plan_ca_ref, 60))}")
             elif plan:
                 if verbose:
-                    for line in plan.split('\n'):
-                        print(f"{detail_prefix}{fmt('📋 ' + line)}")
+                    emit("📋 ", plan)
                 else:
                     print(f"{detail_prefix}{fmt('→ ' + truncate(plan, 60))}")
 
-            # Show notes
-            notes = get_task_notes(task)
-            for note in notes:
-                if verbose:
-                    print(f"{detail_prefix}{fmt('📝 ' + note.description)}")
-                    if note.breadcrumb:
-                        print(f"{detail_prefix}{fmt('   🔖 ' + note.breadcrumb)}")
-                else:
-                    print(f"{detail_prefix}{fmt('📝 ' + truncate(note.description, 60))}")
+            # Notes: counted on the task line at level 0 (see note_count_marker),
+            # listed truncated at level 1, whole at level 2.
+            if level >= 1:
+                for note in get_task_notes(task):
+                    if verbose:
+                        emit("📝 ", note.description)
+                        if note.breadcrumb:
+                            print(f"{detail_prefix}{fmt('   🔖 ' + note.breadcrumb)}")
+                    else:
+                        print(f"{detail_prefix}{fmt('📝 ' + truncate(note.description, 60))}")
 
-            # In verbose mode, show all updates (not just notes, excluding completion reports)
+            # At level 2, show all updates (not just notes, excluding completion reports)
             if verbose and task.mtmd and task.mtmd.updates:
                 lifecycle_updates = [u for u in task.mtmd.updates
                                    if getattr(u, 'type', None) not in ('note', 'completion')]
                 for update in lifecycle_updates:
-                    desc = update.description or "(lifecycle update)"
-                    print(f"{detail_prefix}{fmt('🔄 ' + desc)}")
+                    emit("🔄 ", update.description or "(lifecycle update)")
                     if update.breadcrumb:
                         print(f"{detail_prefix}{fmt('   🔖 ' + update.breadcrumb)}")
 
-            # Always show completion reports (both modes)
+            # Completion reports from -v up; the default view leaves them out
+            # entirely (the ✔ and strikethrough already say the task is done).
             # Last completion report = green, previous = strikethrough
             completion_reports = []
-            if task.mtmd:
+            if task.mtmd and level >= 1:
                 # Get completion reports from updates with type='completion'
                 for u in (task.mtmd.updates or []):
                     if getattr(u, 'type', None) == 'completion' and u.description:
@@ -5771,23 +6004,20 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                     completion_reports.append((task.mtmd.completion_report, bc))
 
             for i, (report, breadcrumb) in enumerate(completion_reports):
-                is_last = (i == len(completion_reports) - 1)
-                if is_last:
-                    # Last completion report: green
-                    if verbose:
-                        print(f"{detail_prefix}{fmt_green('✅ ' + report)}")
-                        if breadcrumb:
-                            print(f"{detail_prefix}{fmt_green('   🔖 ' + breadcrumb)}")
-                    else:
-                        print(f"{detail_prefix}{fmt_green('✅ ' + truncate(report, 60))}")
+                style = fmt_green if i == len(completion_reports) - 1 else fmt
+                if verbose:
+                    emit("✅ ", report, style)
+                    if breadcrumb:
+                        print(f"{detail_prefix}{style('   🔖 ' + breadcrumb)}")
                 else:
-                    # Previous completion reports: strikethrough
-                    if verbose:
-                        print(f"{detail_prefix}{fmt('✅ ' + report)}")
-                        if breadcrumb:
-                            print(f"{detail_prefix}{fmt('   🔖 ' + breadcrumb)}")
-                    else:
-                        print(f"{detail_prefix}{fmt('✅ ' + truncate(report, 60))}")
+                    print(f"{detail_prefix}{style('✅ ' + truncate(report, 60))}")
+
+        def note_count_marker(task):
+            """At level 0 a task's notes are a count on its line, not lines of their own."""
+            if succinct or level >= 1:
+                return ""
+            n = len(get_task_notes(task))
+            return f" {ANSI_DIM}📝 {n}{ANSI_RESET}" if n else ""
 
         _rendered = set()
 
@@ -5809,8 +6039,28 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
             # CC-style markers with colors - subject now contains #N prefix
             suffix = format_task_suffix(task)
-            subject = _truncate_subject_title(subject_with_live_parent(task), title_width)
-            if task.status == "completed":
+            subject = _truncate_subject_title(_without_parent_marker(subject_with_live_parent(task)), title_width)
+
+            if is_archived(task) and collapse_archived:
+                # One line for the whole archived subtree. Only a still-open
+                # descendant (left by --no-cascade) is drawn beneath it.
+                below = count_archived_below(task.id)
+                text = f"{ANSI_DIM}{_strip_ansi(subject)}{ANSI_RESET}"
+                if below:
+                    text += f" {ANSI_DIM}({below} archived){ANSI_RESET}"
+                if suffix:
+                    text = f"{text} {suffix}"
+                print(f"{prefix}{connector}📦 {text}")
+                live_children = [c for c in get_children(task.id) if has_live(c)]
+                for i, child in enumerate(live_children):
+                    print_tree(child, prefix + extension, i == len(live_children) - 1,
+                               depth + 1, live_children)
+                return
+
+            if is_archived(task):
+                status_icon = "📦"
+                text = f"{ANSI_DIM}{_strip_ansi(subject)}{ANSI_RESET}"
+            elif task.status == "completed":
                 status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
                 text = f"{ANSI_DIM}{ANSI_STRIKE}{subject}{ANSI_RESET}"
             elif task.status == "in_progress":
@@ -5834,6 +6084,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
                 elif scope_state[task.id] == "paused":
                     text += " ⏸️"
 
+            text += note_count_marker(task)
             text += recency_marker(task)
 
             print(f"{prefix}{connector}{status_icon} {text}")
@@ -5882,7 +6133,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
 
         # Print root specially with CC-style markers - subject now contains #N prefix
         root_suffix = format_task_suffix(root)
-        root_subject = _truncate_subject_title(subject_with_live_parent(root), title_width)
+        root_subject = _truncate_subject_title(_without_parent_marker(subject_with_live_parent(root)), title_width)
         if root.status == "completed":
             status_icon = f"{ANSI_GREEN}✔{ANSI_RESET}"
             root_text = f"{ANSI_DIM}{ANSI_STRIKE}{root_subject}{ANSI_RESET}"
@@ -5897,6 +6148,7 @@ def cmd_task_tree(args: argparse.Namespace) -> int:
         if scope_state and root.id in scope_state:
             if scope_state[root.id] == "active":
                 root_text += " 👀"
+        root_text += note_count_marker(root)
         root_text += recency_marker(root)
         print(f"{status_icon} {root_text}")
 
@@ -6113,7 +6365,8 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         print(f"   • macf_tools task start {task_id}    → in_progress")
         print(f"   • macf_tools task pause {task_id}    → pending")
         print(f"   • macf_tools task complete {task_id} → completed")
-        print(f"   • macf_tools task archive {task_id}  → archived")
+        print(f"   • macf_tools task archive {task_id} --reason \"...\"  → archived")
+        print(f"   • macf_tools task unarchive {task_id}  → back to its prior status")
         return 1
 
     # Block direct description editing - preserves MTMD metadata
@@ -7918,12 +8171,16 @@ def cmd_task_create_sprint(args: argparse.Namespace) -> int:
             no_auto_start=getattr(args, "no_auto_start", False),
         )
 
+        from .budget_digest import sprint_started
+        budget_line = sprint_started(result["task_id"])
         if getattr(args, "json", False):
             print(json.dumps(result, indent=2))
         else:
             print(f"✅ Created SPRINT task #{result['task_id']}")
             print(f"📄 Sprint log: {result['ca_path']}")
             print(f"📌 Scope ({len(result['scope'])} tasks): {result['scope']}")
+            if budget_line:
+                print(budget_line)
             if result["auto_start_completed"]:
                 print(f"🏃 Auto-started in SPRINT mode")
             elif not getattr(args, "no_auto_start", False):
@@ -7991,31 +8248,78 @@ def cmd_task_create_play_time(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_task_archive(args: argparse.Namespace) -> int:
-    """DEPRECATED: task archive no longer performs meaningful archiving.
+def _archive_report_lines(report, verb: str, dry_run: bool = False):
+    """Human lines for an archive or unarchive report (counts come from read-back)."""
+    lines = []
+    if dry_run:
+        lines.append(f"📦 Dry run: {verb} would touch {len(report.planned)} task(s); nothing was changed")
+        for t in report.planned:
+            lines.append(f"   #{t.id} [{t.status}] {_strip_ansi(t.subject or '')[:90]}")
+    else:
+        lines.append(f"📦 {len(report.changed)} {verb}, {len(report.unchanged)} already so, "
+                     f"{len(report.failed)} failed")
+    for f in report.failed:
+        lines.append(f"❌ #{f['id']} failed: {f['why']}")
+    for m in report.missing:
+        lines.append(f"❌ #{m} not found")
+    if report.descoped:
+        lines.append(f"   removed from sprint scope: {', '.join('#' + t for t in report.descoped)}")
+    if report.kept:
+        lines.append(f"   left archived (put down earlier, by another call): "
+                     f"{', '.join('#' + t for t in report.kept)}")
+    return lines
 
-    The operator retired this command (2026-08-06): it printed a ✅ success line
-    while writing nothing — a report of a state change that did not happen, the
-    exact failure mode to avoid. Rather than repair an unwanted feature it now
-    fails closed with a pointer to the supported alternative. Kept as a stub (not
-    removed) so the subcommand still resolves and explains itself rather than
-    vanishing from under existing muscle memory.
+
+def cmd_task_archive(args: argparse.Namespace) -> int:
+    """Archive tasks: status `archived`, the reason and prior status recorded, read back.
+
+    Retired on 2026-08-06 because it printed a success line while writing
+    nothing; restored as a command whose every reported change was read back
+    from disk, and which exits nonzero naming any task whose write did not stick.
     """
+    import json
+    from .task.archive import archive_tasks, tracked_by_duties
+    ids = [str(_parse_task_id_arg(t)) for t in (getattr(args, "task_ids", None) or [])]
+    reason = (getattr(args, "reason", "") or "").strip()
+    if not reason:
+        print("❌ --reason is required: archiving puts work down, and the record says why")
+        return 1
+    dry_run = getattr(args, "dry_run", False)
+    report = archive_tasks(ids, reason, cascade=not getattr(args, "no_cascade", False), dry_run=dry_run)
+    tracked = tracked_by_duties([t.id for t in report.planned])
     if getattr(args, "json_output", False):
-        import json
         print(json.dumps({
-            "success": False,
-            "deprecated": True,
-            "message": "task archive is deprecated; it performed no archiving. "
-                       "Use `task hide-completed` to declutter.",
+            "success": report.ok, "dry_run": dry_run,
+            "planned": [t.id for t in report.planned], "archived": report.changed,
+            "already_archived": report.unchanged, "failed": report.failed,
+            "missing": report.missing, "descoped": report.descoped, "tracked_by_duties": tracked,
         }, indent=2))
     else:
-        print("⚠️  `task archive` is DEPRECATED and performs no archiving.")
-        print("    It used to print a success checkmark while writing nothing — a")
-        print("    false report of a state change. To declutter the task tree, use:")
-        print("        macf_tools task hide-completed")
-    # Fail closed: never exit 0, so nothing can read this as a successful archive.
-    return 2
+        for line in _archive_report_lines(report, "archived", dry_run):
+            print(line)
+        for tid, titles in tracked.items():
+            print(f"   #{tid} is tracked by a role duty: {'; '.join(titles)}")
+        if report.ok and not dry_run and report.changed:
+            print("   undo with: macf_tools task unarchive " + " ".join(ids))
+    return 0 if report.ok else 1
+
+
+def cmd_task_unarchive(args: argparse.Namespace) -> int:
+    """Put archived tasks back at the status each had when it was archived."""
+    import json
+    from .task.archive import unarchive_tasks
+    ids = [str(_parse_task_id_arg(t)) for t in (getattr(args, "task_ids", None) or [])]
+    report = unarchive_tasks(ids, cascade=not getattr(args, "no_cascade", False))
+    if getattr(args, "json_output", False):
+        print(json.dumps({
+            "success": report.ok, "unarchived": report.changed, "not_archived": report.unchanged,
+            "left_archived": report.kept,
+            "failed": report.failed, "missing": report.missing,
+        }, indent=2))
+    else:
+        for line in _archive_report_lines(report, "unarchived"):
+            print(line)
+    return 0 if report.ok else 1
 
 
 def cmd_task_restore(args: argparse.Namespace) -> int:
@@ -8033,17 +8337,14 @@ def cmd_task_restore(args: argparse.Namespace) -> int:
         print(json.dumps({
             "success": False,
             "deprecated": True,
-            "message": "task restore is deprecated; the archive subsystem it "
-                       "depended on performed no real archiving. Use "
-                       "`task hide-completed` / `task unhide-all` to manage tree clutter.",
+            "message": "task restore is retired: archives are no longer copied out of "
+                       "the store. Use `task unarchive ID` to put an archived task back.",
         }, indent=2))
     else:
-        print("⚠️  `task restore` is DEPRECATED — the archive/restore/archived")
-        print("    trio is retired. `task archive` reported success while writing")
-        print("    nothing, so there is no supported archive to restore from. To")
-        print("    manage task-tree clutter, use:")
-        print("        macf_tools task hide-completed")
-        print("        macf_tools task unhide-all")
+        print("⚠️  `task restore` is DEPRECATED. Archived tasks stay in the store")
+        print("    (status `archived`), so there is no archive file to restore from.")
+        print("    To put an archived task back where it was:")
+        print("        macf_tools task unarchive ID")
     # Fail closed: never exit 0, so nothing reads this as a successful restore.
     return 2
 
@@ -8062,16 +8363,13 @@ def cmd_task_archived_list(args: argparse.Namespace) -> int:
         print(json.dumps({
             "success": False,
             "deprecated": True,
-            "message": "task archived is deprecated; the archive subsystem "
-                       "produced no real archives. Use `task hide-completed` / "
-                       "`task unhide-all` to manage tree clutter.",
+            "message": "task archived is retired: archived tasks stay in the store. "
+                       "Use `task tree --archived` (or `task list --archived`) to see them.",
         }, indent=2))
     else:
-        print("⚠️  `task archived` is DEPRECATED — the archive/restore/archived")
-        print("    trio is retired. `task archive` produced no real archives, so this")
-        print("    list has nothing to show. To manage task-tree clutter, use:")
-        print("        macf_tools task hide-completed")
-        print("        macf_tools task unhide-all")
+        print("⚠️  `task archived` is DEPRECATED. Archived tasks stay in the store")
+        print("    with status `archived`. To see them:")
+        print("        macf_tools task tree --archived")
     # Fail closed: never exit 0, so nothing reads this as an authoritative listing.
     return 2
 
@@ -8128,7 +8426,8 @@ def cmd_task_hide_completed(args: argparse.Namespace) -> int:
                     hidden_count += 1
                 else:
                     skipped_count += 1
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"⚠️ MACF: could not read task file {task_file.name} to check its status (skipping it): {e}", file=sys.stderr)
             continue
 
     # Re-count after all renames complete. Same dotfile trap: an unfiltered
@@ -8553,6 +8852,13 @@ def cmd_task_pause(args: argparse.Namespace) -> int:
     print(f"   Breadcrumb: {breadcrumb}")
     if cleared_policies:
         print(f"   Cleared policies: {cleared_policies}")
+    try:
+        from .task.scope import get_scope_state
+        if get_scope_state().get(str(task_id)) == "active":
+            print(f"⚠️  #{task_id} is still active in scope, so the Stop hook's scope gate keeps counting it. "
+                  f"To quiet the gate: macf_tools task scope pause {task_id} --justification <reason>")
+    except (ImportError, OSError, ValueError) as e:
+        print(f"⚠️  could not check whether #{task_id} is scoped ({e})", file=sys.stderr)
     return 0
 
 
@@ -8867,10 +9173,22 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
             _readded.append(_sid)
 
     from .task.scope import get_scope_state
-    _kept_paused = [t for t, st in get_scope_state().items() if st == "paused" and t in expanded]
+    _before = get_scope_state()
+    _kept_paused = [t for t, st in _before.items() if st == "paused" and t in expanded]
 
     result = set_scope(expanded, parent_expanded=len(expanded) > len(raw_ids),
                        expanded_from=raw_ids[0] if len(raw_ids) == 1 else None)
+
+    # `scope set` replaces the scope's open tasks (task_management, autonomous_sprint): an
+    # active or paused task this list leaves out leaves the scope. A completed one stays as
+    # the scope's history. Only after a set that scoped something, so a failed set changes nothing.
+    _left = []
+    if result["success"]:
+        _left = [t for t, st in _before.items()
+                 if st in ("active", "paused") and t not in result["tasks_scoped"]]
+        if _left:
+            from .task.scope import remove_from_scope
+            _left = remove_from_scope(_left)["removed_ids"]
 
     for _done in result.get("skipped_completed", []):
         print(f"⚠️  Task #{_done} is done (completed or archived), so it was not scoped")
@@ -8882,6 +9200,8 @@ def cmd_task_scope_set(args: argparse.Namespace) -> int:
         for _pid in _kept_paused:
             # Re-listing a paused task does not answer what it waits on; unpause is explicit.
             print(f"   ⏸️  #{_pid} stays paused (macf_tools task scope unpause {_pid} to resume it)")
+        for _lid in _left:
+            print(f"   ➖ #{_lid} left the scope (not in this list)")
         for _sid in _readded:
             # Reported, never silent: the caller did not ask for this task and
             # should see that the sprint mode-lock is what put it back.
@@ -9211,7 +9531,8 @@ def _commit_landed_in_merged_pr(repo_slug: str, commits: list) -> bool:
             )
             if result.returncode == 0 and result.stdout.strip() not in ("", "[]"):
                 return True
-        except (FileNotFoundError, _subprocess.TimeoutExpired):
+        except (FileNotFoundError, _subprocess.TimeoutExpired) as e:
+            print(f"⚠️ MACF: gh pr list for {sha[:7]} failed (trying next commit): {e}", file=sys.stderr)
             continue
     return False
 
@@ -9471,7 +9792,7 @@ def _autowork_counts(task, reader, scoped_ids):
             for p in ldir.glob("*.md"):
                 try:
                     named = _dt.strptime(p.name[:17], "%Y-%m-%d_%H%M%S")
-                except ValueError:
+                except ValueError:  # noqa: S112 - non-timestamped files (INDEX.md and similar) are expected here; a warning per file would flood
                     continue      # INDEX.md, and anything else not named for a moment
                 if named >= since:
                     learnings += 1
@@ -10025,6 +10346,16 @@ def cmd_task_complete(args: argparse.Namespace) -> int:
     })
 
     if success:
+        if task_type == "SPRINT":
+            from .budget_digest import sprint_ended
+            _budget_line = sprint_ended(task_id)
+            if _budget_line:
+                print(f"   {_budget_line}")
+                from .task.reader import add_task_note
+                if not add_task_note(str(task_id), _budget_line.removeprefix("💳 "), agent="PA",
+                                     note_type="note", breadcrumb=breadcrumb):
+                    print(f"⚠️ MACF: sprint budget note not added to #{task_id}; the event stands", file=sys.stderr)
+
         # Hide completed task file from CC's native scanner (dot-prefix).
         # hide_task_file guards this itself — it returns early for a non-CC
         # store — so the call is safe everywhere and only the report is gated.
@@ -10270,7 +10601,7 @@ def _check_port_available(port: int, host: str = "127.0.0.1") -> tuple:
         try:
             s.bind((host, port))
             return True, None
-        except OSError:
+        except OSError:  # noqa: S110 - a failed bind is how a busy port is detected; the lsof lookup below names the owner
             pass
     # Port in use — try to find owner via lsof
     try:
@@ -10281,8 +10612,8 @@ def _check_port_available(port: int, host: str = "127.0.0.1") -> tuple:
         if result.returncode == 0 and result.stdout.strip():
             owner_pid = int(result.stdout.strip().split("\n")[0])
             return False, owner_pid
-    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
-        pass
+    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError) as e:
+        print(f"⚠️ MACF: lsof port owner lookup failed (port {port} reported busy, owner unknown): {e}", file=sys.stderr)
     return False, None
 
 
@@ -10901,6 +11232,203 @@ def cmd_amail_key_status(args: argparse.Namespace) -> int:
     return 1 if (report["required"] and not report["exists"]) else 0
 
 
+def cmd_amail_peer_card(args: argparse.Namespace) -> int:
+    """Print this broker's peer card (MIS-0004 R56 to R65), read from the operator's files."""
+    from macf.amail import peer_setup
+    from macf.amail.registry import Registry, registry_path
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+    try:
+        if args.all:
+            from macf.amail.deploy_config import BrokerDeployConfig, load_declarative_config
+            deploy = BrokerDeployConfig.model_validate(load_declarative_config(Path(cfg["broker_config"])))
+            agents = sorted(deploy.load_addressing().agents)
+        else:
+            agents = args.agent or [cfg["agent"]]
+        card = peer_setup.build_card(Path(cfg["broker_config"]), agents=agents, registry=Registry(registry_path()),
+                                     own_agent=cfg["agent"], own_key=cfg.get("signing_key") or None)
+    except (peer_setup.CardError, ValueError, OSError) as e:
+        print(f"❌ {e}")
+        return 1
+    print(peer_setup.render_card(card) if args.json else "\n".join(peer_setup.describe(card)))
+    return 0
+
+
+def cmd_amail_peer_add(args: argparse.Namespace) -> int:
+    """Declare a peer broker from its card (MIS-0004 R56 to R65): shown first, written on a yes."""
+    import datetime as _dt
+
+    from macf.amail import peer_setup
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+    try:
+        if args.card == "-":
+            text = sys.stdin.read()
+        elif args.card.lstrip().startswith("{"):
+            text = args.card
+        else:
+            text = Path(args.card).read_text()
+        card = peer_setup.parse_card(text)
+        plan = peer_setup.plan_add(Path(cfg["broker_config"]), card,
+                                   local_agents=args.for_agents or [cfg["agent"]], note=args.note)
+    except (peer_setup.CardError, OSError) as e:
+        print(f"❌ {e}")
+        return 1
+    if not plan.changed:
+        print(f"✅ {card['domain']} is already declared as this card says; nothing to write")
+    else:
+        print(plan.diff().rstrip("\n"))
+        if args.dry_run:
+            print("dry run: nothing written")
+        else:
+            if not args.yes:
+                if not sys.stdin.isatty() or args.card == "-":
+                    print("Not written. Run again with --yes to write it.")
+                    return 0
+                if input("Write this? [y/N] ").strip().lower() not in ("y", "yes"):
+                    print("Not written.")
+                    return 0
+            for path in (plan.broker_path, plan.addressing_path):
+                if not os.access(path, os.W_OK):
+                    print(f"❌ {path} is not this account's to write; its owner applies the change above")
+                    return 1
+            stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            try:
+                written = plan.write(backup_suffix=f".bak-peer-add-{stamp}")
+            except (peer_setup.CardError, OSError) as e:
+                print(f"❌ {e}")
+                return 1
+            for path in written:
+                print(f"✅ wrote {path} (the old one kept beside it, .bak-peer-add-{stamp})")
+            print("The broker reads its config at start: restart it for the link to take effect.")
+    if plan.registry_lines:
+        print("\nThe registry is the operator's: each declaration stages its change and prints the root step.")
+        for line in plan.registry_lines:
+            print(line)
+    return 0
+
+
+def cmd_amail_peer_check(args: argparse.Namespace) -> int:
+    """Check a rung-2 peer link station by station (MIS-0004 R56 to R65); 1 when any station fails."""
+    from macf.amail import BrokerUnavailable, Message, SigningError, peer_setup, sign_for_submission, submit
+    from macf.amail.registry import Registry, registry_path
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+
+    def _send():
+        to = args.to
+        if not to:
+            from macf.amail.deploy_config import BrokerDeployConfig, load_declarative_config
+            deploy = BrokerDeployConfig.model_validate(load_declarative_config(Path(cfg["broker_config"])))
+            link = {k.lower(): v for k, v in deploy.peer_links.items()}.get(args.domain.lower())
+            to = f"{sorted(link.agents)[0]}@{args.domain}" if link and link.agents else ""
+        if not to:
+            return {"ok": False, "refused": ["no recipient: pass --to"]}
+        msg = Message(sender=f"{cfg['agent']}@{cfg['domain']}", to=[to], subject="amail peer check",
+                      body="A test message from `macf_tools amail peer check --send`. No reply is needed.")
+        try:
+            msg.signature = sign_for_submission(msg, Path(cfg["signing_key"]) if cfg.get("signing_key") else None,
+                                                required=bool(cfg.get("signing_required")))
+            note = _ensure_host_broker(cfg)
+            if note:
+                print(note, file=sys.stderr)
+            return submit(cfg["agent"], msg, Path(cfg["socket"]))
+        except (SigningError, BrokerUnavailable) as e:
+            return {"ok": False, "refused": [str(e)]}
+
+    stations = peer_setup.check_peer(Path(cfg["broker_config"]), args.domain, registry=Registry(registry_path()),
+                                     send=_send if args.send else None)
+    marks = {True: "✅", False: "❌", None: "➖"}
+    for s in stations:
+        print(f"{marks[s.ok]} {s.name}: {s.detail}")
+        if s.fix and s.ok is not True:
+            print(f"     fix: {s.fix}")
+    return 1 if any(s.ok is False for s in stations) else 0
+
+
+def cmd_amail_outbox(args: argparse.Namespace) -> int:
+    """What the broker holds for its peers: waiting for a retry, or refused with the peer's reason."""
+    from macf.amail import readiness
+    from macf.amail.peer_setup import CardError
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+    me = f"{cfg['agent']}@{cfg['domain']}" if cfg.get("agent") and cfg.get("domain") else None
+    try:
+        held = readiness.outbox(Path(cfg["broker_config"]), sender=None if args.all else me)
+    except CardError as e:
+        print(f"❌ {e}")
+        return 1
+    if args.json:
+        print(json.dumps([h.__dict__ for h in held], indent=2))
+        return 0
+    if not held:
+        print("✅ nothing held for a peer" + ("" if args.all else f" from {me}"))
+        return 0
+    for h in held:
+        age = f"{h.age_s / 60:.0f} min" if h.age_s is not None else "age unknown"
+        mark = "⏳" if h.state == "waiting" else "❌"
+        print(f"{mark} {h.state}  {h.recipient}  {h.message_id}  from {h.sender}, handed off {age} ago")
+        if h.reason:
+            print(f"     {h.reason}")
+    for peer in sorted({h.peer for h in held if h.state == "waiting"}):
+        print(f"The broker retries waiting mail on each sweep; `macf_tools amail peer check {peer}` says why "
+              f"it is not taken yet.")
+    return 0
+
+
+def cmd_amail_broker_unit(args: argparse.Namespace) -> int:
+    """The host broker as a declared unit of its own primal daemon: shown, written on --write."""
+    import pwd as _pwd
+
+    from macf.amail import host_daemon
+
+    cfg = _amail_config()
+    if not cfg.get("broker_config"):
+        print("❌ no broker config is named; set broker_config in amail.json (or MACF_AMAIL_BROKER_CONFIG)")
+        return 1
+    interim = host_daemon.interim_jobs(Path.home() / "Library" / "LaunchAgents") if sys.platform == "darwin" else []
+    try:
+        plan = host_daemon.plan(Path(cfg["broker_config"]), python=Path(sys.executable),
+                                account=_pwd.getpwuid(os.getuid()).pw_name,
+                                path_dirs=os.environ.get("PATH", "").split(":"),
+                                home=Path(args.home) if args.home else None,
+                                pythonpath=os.environ.get("PYTHONPATH") or None, interim_plists=interim)
+    except (host_daemon.HostDaemonError, ValueError, OSError) as e:
+        print(f"❌ {e}")
+        return 1
+    print(f"broker daemon {plan.card}, home {plan.home}")
+    print(f"   its unit runs {sys.executable} with this shell's PATH"
+          + (" and PYTHONPATH" if os.environ.get("PYTHONPATH") else "")
+          + ": run this from the environment the broker should run in")
+    for path in plan.unchanged:
+        print(f"   {path}: already as it should be")
+    for path, text in plan.files.items():
+        print(f"   {path}: {'would write' if not args.write else 'writing'}")
+        if path.name == "declaration.json":
+            print("\n".join("      " + line for line in text.rstrip("\n").splitlines()))
+    if args.write and plan.files:
+        plan.write()
+        print("✅ written")
+    elif plan.files:
+        print("Not written; run again with --write.")
+    print("\nThen, as the operator (the service manager is yours to change):")
+    for step in plan.steps:
+        print(f"  {step}")
+    return 0
+
+
 def cmd_amail_registry_check(args: argparse.Namespace) -> int:
     """Check the operator's registry (MIS-0004 R42): who can write it, and what it declares."""
     from macf.amail.registry import Registry, RegistryError, registry_path
@@ -10976,7 +11504,7 @@ def _broker_socket_ready(sock: Path, timeout: float = 0.0) -> bool:
                 s.connect(str(sock))
                 s.close()
                 return True
-            except OSError:
+            except OSError:  # noqa: S110 - a refused probe is the normal not-ready state, retried every 0.2 s
                 pass
         if _time.monotonic() >= deadline:
             return False
@@ -11203,14 +11731,18 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
     # filesystem is the access path to the agent's store; the socket only
     # ever reaches the broker's.
     from macf.amail import store
-    from macf.amail.client import ingest, list_delivered_internet
+    from macf.amail.client import BoxClaimed, IngestBusy, ingest, list_delivered_internet
     box = Path(cfg["handoff"]) / (cfg.get("agent") or "")
     if cfg.get("agent") and box.is_dir():
         # The contacts path lets ingest verify signatures with the keys
         # THIS recipient holds — a filesystem read, so it still works
         # with the broker stopped, which R4 requires.
-        ingested = ingest(home, box, contacts_path=cfg.get("contacts"),
-                          agent=cfg.get("agent") or "")
+        try:
+            ingested = ingest(home, box, contacts_path=cfg.get("contacts"),
+                              agent=cfg.get("agent") or "", domain=cfg.get("domain") or "")
+        except (BoxClaimed, IngestBusy) as e:     # another store's box, or its claim mid-write (#872)
+            print(f"⚠️ MACF: amail: nothing ingested: {e}", file=sys.stderr)
+            ingested = []
         ok = sum(1 for r in ingested if r.get("ingested"))
         # An entry another ingest took (the primal daemon's receiver) is in the store, not stuck.
         stuck = [r for r in ingested if not r.get("ingested") and not r.get("taken")]
@@ -11243,6 +11775,19 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
             print("(no unread messages" + (f"; {read_count} read, `amail list --all` shows them)"
                                            if read_count else ")"))
         return 0
+    if getattr(args, "compact", False):
+        # `amail inbox`: the same messages, newest first, one line each, the trust mark first.
+        for m in sorted(msgs, key=lambda m: m.date or "", reverse=True):
+            print(f"{_trust_badge(m)}  {_term_safe(m.date)}  {_term_safe(m.sender)}  "
+                  f"{_term_safe(m.subject)}  ({_term_safe(m.message_id)})")
+        for item in sorted(internet, key=lambda i: str(i.get("sidecar", {}).get("received_at", "")), reverse=True):
+            sc, obs = item.get("sidecar", {}), item.get("sidecar", {}).get("observed", {})
+            print(f"🌐  {_term_safe(str(sc.get('received_at', '?')))}  {_term_safe(str(obs.get('envelope_from', '?')))}  "
+                  f"{_term_safe(str(obs.get('subject', '(no subject)')))}")
+        msgs, internet_shown = [], len(internet)
+        internet = []
+    else:
+        internet_shown = None
     for m in msgs:
         print(f"{_term_safe(m.date)}  {_term_safe(m.sender)}  {_trust_badge(m)}")
         print(f"    {_term_safe(m.subject)}")
@@ -11261,6 +11806,9 @@ def cmd_amail_list(args: argparse.Namespace) -> int:
         print(f"    {_term_safe(str(obs.get('subject', '(no subject)')))}")
         print(f"    sha={_term_safe(str(sc.get('raw_sha256', '?'))[:16])} "
               f"class={_term_safe(str(authz.get('outcome', '?')))}")
+    if internet_shown is not None:
+        print(f"\n{read_count} read, not shown (`amail list --all`)" if read_count else "")
+        return 0
     print(f"\n{len(msgs)} bundle message(s), {len(internet)} internet message(s)"
           + (f"; and {read_count} read, not shown (`amail list --all`)" if read_count and not every else ""))
     return 0
@@ -11344,6 +11892,106 @@ def cmd_amail_read(args: argparse.Namespace) -> int:
     return 0
 
 
+def _amail_setup_pieces(cfg: dict) -> list:
+    """The setup pieces `amail status` lists (amail/readiness.py), or none when they can't be read."""
+    try:
+        from macf.agent_stack import pd_unit_installed
+        from macf.amail import host_daemon, readiness
+        from macf.amail.registry import Registry, registry_path
+    except ImportError as e:
+        print(f"⚠️ MACF: setup pieces unavailable (not listed): {e}", file=sys.stderr)
+        return []
+    launch_agents = Path.home() / "Library" / "LaunchAgents"
+    return readiness.pieces(cfg, registry=Registry(registry_path()), daemon_installed=pd_unit_installed,
+                            interim_jobs=lambda: host_daemon.interim_jobs(launch_agents)
+                            if sys.platform == "darwin" else [])
+
+
+def cmd_amail_contacts(args: argparse.Namespace) -> int:
+    """The correspondents the broker checks for this agent: address and direction, read-only.
+
+    The broker answers over its socket, so the list is what it enforces now. It shows identity and
+    direction and never a route, a key or a push grant; a change is a deployment change (amail
+    policy 4.1), not something this command can make."""
+    import json
+    from macf.amail.client import BrokerUnavailable, contacts as _contacts
+
+    cfg = _amail_config()
+    started = _ensure_host_broker(cfg)
+    if started:
+        print(started, file=sys.stderr)
+    try:
+        reply = _contacts(Path(cfg["socket"]), sender=cfg.get("agent") or None)
+    except BrokerUnavailable as e:
+        print(f"❌ {e}")
+        return 1
+    if not reply.get("ok", False):
+        # A refusal is not an empty list: a broker that predates the operation, or one that won't answer
+        # this agent, said so, and "no correspondents" would tell the agent it may write to nobody.
+        error = str(reply.get("error") or "the broker gave no reason")
+        hint = ("this broker was started before it learned this operation; restart it (the operator's step)"
+                if "unknown operation" in error else "")
+        if args.json:
+            print(json.dumps({"ok": False, "error": error, "hint": hint}, indent=2))
+        else:
+            print(f"❌ the broker refused to list correspondents: {error}" + (f"\n   {hint}" if hint else ""))
+        return 1
+    entries = list(reply.get("contacts") or [])
+    needle = (args.filter or "").strip().lower()
+    if needle:
+        entries = [e for e in entries if needle in str(e.get("address", "")).lower()]
+    if args.json:
+        print(json.dumps({"contacts": entries, "contact_list": reply.get("contact_list", True)}, indent=2))
+        return 0
+    if not reply.get("contact_list", True):
+        print("this broker has no contact list, so it checks no correspondents")
+        return 0
+    if not entries:
+        print("no correspondent matches" if needle else "no correspondents are declared for this agent")
+        return 0
+    wide = max(len(str(e["address"])) for e in entries)
+    marks = {"both": "↔", "outbound": "→", "inbound": "←", "neither": "✖ withdrawn"}
+    for e in entries:
+        print(f"{str(e['address']).ljust(wide)}  {marks.get(e['direction'], '?')}  {e['direction']}")
+    return 0
+
+
+def cmd_amail_state(args: argparse.Namespace) -> int:
+    """Where one message this agent sent stopped: each recipient's latest receipt state, asked of the
+    broker by the message's id (MIS-0004 R24). Read-only."""
+    import json
+    from macf.amail.client import BrokerUnavailable, message_state
+
+    cfg = _amail_config()
+    started = _ensure_host_broker(cfg)
+    if started:
+        print(started, file=sys.stderr)
+    try:
+        reply = message_state(args.message_id, Path(cfg["socket"]), sender=cfg.get("agent") or None)
+    except BrokerUnavailable as e:
+        print(f"❌ {e}")
+        return 1
+    if args.json:
+        print(json.dumps(reply, indent=2))
+        return 0 if reply.get("ok") and reply.get("found") else 1
+    if not reply.get("ok", False):
+        error = str(reply.get("error") or "the broker gave no reason")
+        hint = ("this broker was started before it learned this operation; restart it (the operator's step)"
+                if "unknown operation" in error else "")
+        print(f"❌ the broker gave no state: {error}" + (f"\n   {hint}" if hint else ""))
+        return 1
+    if not reply.get("found"):
+        # Not "nothing happened": the broker holds no record of this id for this agent, which is also
+        # the answer for another agent's message.
+        print(f"no record of {args.message_id} sent by this agent")
+        return 1
+    print(f"{args.message_id}: {reply.get('state') or 'unknown (a state this build does not know)'}")
+    for addr, entry in sorted((reply.get("recipients") or {}).items()):
+        detail = f"  {entry['detail']}" if entry.get("detail") else ""
+        print(f"  {addr}  {entry.get('state')}  {entry.get('at')}{detail}")
+    return 0
+
+
 def cmd_amail_status(args: argparse.Namespace) -> int:
     """Report whether amail is usable, and say precisely what is missing if not."""
     import socket as _socket
@@ -11384,7 +12032,7 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     if reachable:
         from macf.amail.client import status as _status, BrokerUnavailable
         try:
-            _resp = _status(sock)
+            _resp = _status(sock, sender=cfg["agent"] or None)
             if _resp.get("ok"):
                 counts = {k: _resp.get(k) for k in
                           ("quarantined", "pending_pickup", "oldest_pending_s", "budget")}
@@ -11416,6 +12064,15 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
         # inbox with three refusals must be distinguishable states.
         "broker_counts": counts,
     }
+    setup = _amail_setup_pieces(cfg)
+    info["setup"] = [{"name": p.name, "ok": p.ok, "detail": p.detail, "fix": p.fix} for p in setup]
+    # The supervision piece reads how the broker is actually run; the autostart flag only says an
+    # agent may start one, so where the piece knows, the broker line says what it found.
+    supervision = next((p for p in setup if p.name == "broker supervision"), None)
+    if supervision is not None:
+        # A short value a script can compare; the sentence goes in its own key (review of #1104).
+        info["broker_kind"] = supervision.kind or info["broker_kind"]
+        info["broker_supervision"] = supervision.detail
     if args.json:
         print(json.dumps(info, indent=2))
         return 0 if reachable else 1
@@ -11426,7 +12083,7 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     print(f"address:  {info['address'] or '(unconfigured)'}")
     print(f"maildir:  {info['maildir'] or '(unknown)'}  [{_local_str}]")
     print(f"broker:   {'✅ reachable' if reachable else '❌ unreachable'} at {sock}"
-          + (f"  [{info['broker_kind']}]" if info["broker_kind"] != "deployment" else ""))
+          + (f"  [{info.get('broker_supervision') or info['broker_kind']}]" if info["broker_kind"] != "deployment" else ""))
     # The pickup box is how a recipient learns it has mail awaiting custody
     # transfer — the one count that calls for an action, so it gets its own
     # line rather than a slot in the summary.
@@ -11451,6 +12108,13 @@ def cmd_amail_status(args: argparse.Namespace) -> int:
     if counts is not None and counts["quarantined"]:
         print(f"⚠️  {counts['quarantined']} message(s) in quarantine — refused "
               f"with reasons attached; the operator can list them broker-side.")
+    if setup:
+        print("setup:")
+        marks = {True: "✅", False: "❌", None: "➖"}
+        for p in setup:
+            print(f"  {marks[p.ok]} {p.name}: {p.detail}")
+            if p.fix and p.ok is not True:
+                print(f"       fix: {p.fix}")
     if not reachable:
         print("\n   Without the broker: sending is impossible (no fallback")
         print("   transport by design — the broker enforces the contact list),")
@@ -11929,6 +12593,21 @@ def _cmd_inject(args):
                   "refused.", file=sys.stderr)
             return 1
         return clear_own_input(getattr(args, "expect", "") or "")
+    if args.command.lstrip("/") == "model":
+        from .supervisor import switch_own_model
+        if getattr(args, "target", ""):
+            print("[inject] model switches only this agent's own model; --target is refused.", file=sys.stderr)
+            return 1
+        if not getattr(args, "value", None):
+            print("[inject] model needs a name (inject model opus --reason ...): a bare /model opens a picker "
+                  "that nobody is there to answer.", file=sys.stderr)
+            return 1
+        then = "" if getattr(args, "no_then", False) else getattr(args, "then", None)
+        return switch_own_model(args.value, getattr(args, "reason", "") or "", then=then,
+                                confirm=not getattr(args, "no_confirm", False))
+    if getattr(args, "value", None):
+        print(f"[inject] {args.command} takes no argument here; only model does.", file=sys.stderr)
+        return 1
     then = None if getattr(args, "no_then", False) else (getattr(args, "then", None) or DEFAULT_TEXT)
     return send_slash_to_self(args.command, target=getattr(args, "target", "") or "", then=then)
 
@@ -12148,6 +12827,26 @@ def cmd_knowledge_query(args: argparse.Namespace) -> int:
     # "which cycle touched X" wants the temporal record. Returning both
     # unlabelled dilutes the first with the second, and the dilution worsens
     # every cycle. See the scholarship policy on node classes and provenance.
+    since = getattr(args, "since", None)
+    if since:
+        import datetime as _dt
+        try:
+            floor = _dt.datetime.fromtimestamp(_parse_since(since)).strftime("%Y-%m-%d")
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 2
+        undated = 0
+        for key in ("nodes", "neighbors"):
+            kept = [n for n in result.get(key, []) if n.get("date") and n["date"] >= floor]
+            undated += sum(1 for n in result.get(key, []) if not n.get("date"))
+            result[key] = kept
+        result["since"], result["undated_left_out"] = floor, undated
+    if getattr(args, "recent", False):
+        for key in ("nodes", "neighbors"):
+            # Stable: equal dates keep their ranked order, and an undated node goes last.
+            dated = sorted((n for n in result.get(key, []) if n.get("date")), key=lambda n: n["date"], reverse=True)
+            result[key] = dated + [n for n in result.get(key, []) if not n.get("date")]
+        result["ordered"] = "newest first"
     node_class = getattr(args, "node_class", None)
     if node_class:
         for key in ("nodes", "neighbors"):
@@ -12303,12 +13002,24 @@ def cmd_knowledge_eval(args: argparse.Namespace) -> int:
         digest = save_snapshot(snap, Path(args.save_snapshot))
         print(f"📸 snapshot {digest[:12]} saved to {args.save_snapshot} (owner-only: it holds private text)")
     try:
-        out = evaluate(Corpus(snap, digest), args.rankers or ["random", "today", "idf", "like"],
+        corpus = Corpus(snap, digest)
+        corpus.context = getattr(args, "context", "plain")
+        if getattr(args, "context_file", None):
+            try:
+                written = json.loads(Path(args.context_file).read_text())
+            except (OSError, ValueError) as e:
+                print(f"❌ cannot read the context file {args.context_file}: {e}")
+                return 2
+            corpus.model_contexts = written.get("contexts", written) if isinstance(written, dict) else {}
+        out = evaluate(corpus, args.rankers or ["random", "today", "idf", "like"],
                        sources=args.labels or ("xref", "citations", "same_subject"), which=args.split,
-                       seed=args.split_seed, compare=tuple(args.compare) if args.compare else None)
+                       seed=args.split_seed, compare=tuple(args.compare) if args.compare else None,
+                       boot=getattr(args, "boot", 2000))
     except EvalRefused as e:
         print(f"❌ refused: {e}")
         return 2
+    if getattr(corpus, "model_contexts", None):
+        out["chart"]["model_contexts"] = sum(1 for n in corpus.web if corpus.model_contexts.get(n))
     print(json.dumps(out, indent=2) if args.json_output else format_report(out))
     return 0
 
@@ -12514,6 +13225,14 @@ def _build_parser() -> argparse.ArgumentParser:
     m.add_argument("paths", nargs="*", help="MIS files or directories (default: framework/mis)")
     m.add_argument("--glossary", metavar="PATH", help="glossary file (default: glossary.md beside the mis directory)")
     m.set_defaults(func=cmd_mis_check)
+    m = mis_sub.add_parser("index", help="the registry: every MIS file's number, title, status, deliberation and "
+                                         "where it lands, read from the files' own headers")
+    m.add_argument("paths", nargs="*", help="MIS files or directories (default: framework/mis)")
+    m.add_argument("--json", action="store_true", help="machine-readable output")
+    m.add_argument("--open", action="store_true",
+                   help="also list the open MIS pull requests as drafts, read from the pull requests' heads "
+                        "(needs gh and the network; never mixed into the landed rows)")
+    m.set_defaults(func=cmd_mis_index)
     budget_p = sub.add_parser("budget", help="print budget thresholds (JSON); subcommands: the subscription's rate limits")
     budget_p.set_defaults(func=cmd_budget)
     budget_sub = budget_p.add_subparsers(dest="budget_cmd")
@@ -12532,6 +13251,15 @@ def _build_parser() -> argparse.ArgumentParser:
     b = budget_sub.add_parser("log", help="samples of the last week as a table")
     b.add_argument("--since", metavar="HOURS", type=float, help="only the last N hours")
     b.set_defaults(func=cmd_budget_log)
+    b = budget_sub.add_parser("me", help="this agent's own usage from its transcripts: tokens, models, causes, points")
+    b.add_argument("--since", default="1d", metavar="AGE", help="window: 1h, 1d, 7d, or a date (default 1d)")
+    b.set_defaults(func=cmd_budget_me)
+    b = budget_sub.add_parser("rate", help="fit this agent's points per weighted token against the account's counter")
+    b.add_argument("--window", type=float, default=48.0, metavar="HOURS", help="hours to fit over (default 48)")
+    b.set_defaults(func=cmd_budget_rate)
+    b = budget_sub.add_parser("ticks", help="fit points per weighted token from the counter's whole-percent crossings")
+    b.add_argument("--since", default="48h", metavar="AGE", help="window: 12h, 2d, or a date (default 48h)")
+    b.set_defaults(func=cmd_budget_ticks)
     b = budget_sub.add_parser("mode", help="the operator's intent for the allowance")
     mode_sub = b.add_subparsers(dest="budget_mode_cmd", required=True)
     m = mode_sub.add_parser("set", help="conserve | normal | burn")
@@ -12569,6 +13297,15 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--include-questions", action="store_true", help="also list question dialogs (AskUserQuestion, ExitPlanMode)")
     pp.add_argument("--json", action="store_true")
     pp.set_defaults(func=cmd_permissions_history)
+    pp = perm_sub.add_parser(
+        "how",
+        help="how each recent tool call was approved, derived from the event log: at a dialog (approved or "
+             "denied), by an allow rule of today's settings, or by the permission mode (#1060)",
+    )
+    pp.add_argument("--days", type=float, default=1.0, metavar="N", help="how far back to read (default 1)")
+    pp.add_argument("--last", type=int, default=30, metavar="N", help="show the newest N calls (default 30)")
+    pp.add_argument("--json", action="store_true")
+    pp.set_defaults(func=cmd_permissions_how)
     pp = perm_sub.add_parser(
         "list", aliases=["rules"],
         help="the permission rules in force for this session, deny, ask and allow, each with its settings "
@@ -12864,6 +13601,10 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_cutover.add_argument("--execute", action="store_true",
                                  help="what the transient unit or launchd job runs: carry the plan out "
                                       "here and now (refused inside a Claude Code session)")
+    harness_cutover.add_argument("--accept-no-linger", action="store_true",
+                                 help="move although `loginctl` linger is off for this user, so the daemon stops at "
+                                      "the last logout and doesn't start at boot (systemd hosts; the plan names the "
+                                      "command that turns it on, which is the host operator's call)")
     harness_cutover.add_argument("--log", help="where --execute writes its progress")
     harness_cutover.add_argument("--job-plist", help=argparse.SUPPRESS)   # the launchd job's own plist, removed when it ends
     harness_cutover.set_defaults(func=cmd_harness_cutover)
@@ -13178,8 +13919,17 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="roles stanza below the tree (default: roles.tree_display in .maceff/config.json, else focused)")
     task_tree_parser.add_argument("--succinct", "-s", action="store_true",
                                   help="hide notes/plans, show only active/pending tasks")
-    task_tree_parser.add_argument("--verbose", "-v", action="store_true",
-                                  help="show full plans, breadcrumbs, and all updates")
+    task_tree_parser.add_argument("-v", dest="verbose", action="count", default=0,
+                                  help="-v lists notes, plans and completion reports (truncated); "
+                                       "-vv shows every note, plan, report, breadcrumb and update in "
+                                       "full, wrapped to 80%% of the terminal. Default: notes counted "
+                                       "on each task's line, no completion reports, and plan lines "
+                                       "only for top-level tasks and GitHub issues and PRs")
+    task_tree_parser.add_argument("--verbose", dest="verbose_level", nargs="?", const="1",
+                                  metavar="LEVEL",
+                                  help="same as -v (LEVEL 1, the default) or -vv (LEVEL 2); "
+                                       "`--verbose ID` still reads ID as the root task, "
+                                       "except ids 1 and 2, which read as levels")
     task_tree_parser.add_argument("--title-width", dest="title_width", type=int, default=None,
                                   metavar="N",
                                   help="truncate task titles to N chars (default: 40 with "
@@ -13467,23 +14217,38 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create_play_time_parser.set_defaults(func=cmd_task_create_play_time)
 
     # task archive
-    task_archive_parser = task_sub.add_parser("archive", help="(DEPRECATED — no-op; use `task hide-completed`)")
-    task_archive_parser.add_argument("task_id", help="task ID to archive (e.g., #67 or 67)")
+    task_archive_parser = task_sub.add_parser(
+        "archive", help="put tasks down: status archived, reason recorded, read back (undo: task unarchive)")
+    task_archive_parser.add_argument("task_ids", nargs="+", help="task IDs to archive (e.g., #67 or 67)")
+    task_archive_parser.add_argument("--reason", required=True,
+                                     help="why the work is put down (recorded on every task)")
     task_archive_parser.add_argument("--no-cascade", dest="no_cascade", action="store_true",
-                                     help="archive only this task, not children (default: cascade)")
+                                     help="archive only the named tasks, not their descendants")
+    task_archive_parser.add_argument("--dry-run", dest="dry_run", action="store_true",
+                                     help="list what would be archived and change nothing")
     task_archive_parser.add_argument("--json", dest="json_output", action="store_true",
                                      help="output as JSON")
     task_archive_parser.set_defaults(func=cmd_task_archive)
 
+    # task unarchive
+    task_unarchive_parser = task_sub.add_parser(
+        "unarchive", help="put archived tasks back at the status each had when archived")
+    task_unarchive_parser.add_argument("task_ids", nargs="+", help="task IDs to unarchive")
+    task_unarchive_parser.add_argument("--no-cascade", dest="no_cascade", action="store_true",
+                                       help="unarchive only the named tasks, not their descendants")
+    task_unarchive_parser.add_argument("--json", dest="json_output", action="store_true",
+                                       help="output as JSON")
+    task_unarchive_parser.set_defaults(func=cmd_task_unarchive)
+
     # task restore
-    task_restore_parser = task_sub.add_parser("restore", help="restore task from archive")
+    task_restore_parser = task_sub.add_parser("restore", help="(DEPRECATED; use `task unarchive`)")
     task_restore_parser.add_argument("archive_path_or_id", help="archive file path or original task ID")
     task_restore_parser.add_argument("--json", dest="json_output", action="store_true",
                                      help="output as JSON")
     task_restore_parser.set_defaults(func=cmd_task_restore)
 
     # task archived (subcommand group)
-    task_archived_parser = task_sub.add_parser("archived", help="archived task operations")
+    task_archived_parser = task_sub.add_parser("archived", help="(DEPRECATED; use `task tree --archived`)")
     task_archived_sub = task_archived_parser.add_subparsers(dest="archived_cmd")
 
     # task archived list
@@ -13805,6 +14570,74 @@ def _build_parser() -> argparse.ArgumentParser:
     amail_status = amail_sub.add_parser("status", help="is amail usable? what is missing?")
     amail_status.add_argument("--json", action="store_true", help="machine-readable output")
     amail_status.set_defaults(func=cmd_amail_status)
+    amail_contacts = amail_sub.add_parser(
+        "contacts", help="the correspondents the broker checks for this agent: address and direction "
+                         "(read-only; the broker answers, so it is what is enforced now)")
+    amail_contacts.add_argument("filter", nargs="?", default=None,
+                                help="show only addresses containing this text")
+    amail_contacts.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_contacts.set_defaults(func=cmd_amail_contacts)
+    amail_state = amail_sub.add_parser(
+        "state", help="where one message you sent stopped: each recipient's latest receipt state, "
+                      "from the broker, by the message's id (MIS-0004 R24)")
+    amail_state.add_argument("message_id", help="the id the broker gave when it accepted the message")
+    amail_state.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_state.set_defaults(func=cmd_amail_state)
+
+    amail_peer = amail_sub.add_parser(
+        "peer", help="rung-2 peer links between brokers (MIS-0004 R56 to R65): cards, not hand-written config")
+    amail_peer_sub = amail_peer.add_subparsers(dest="peer_cmd")
+    amail_peer_card = amail_peer_sub.add_parser(
+        "card", help="print what a peer's operator needs to declare this broker: domain, listener, "
+                     "agents, cards and public keys; never a secret, and it changes nothing")
+    amail_peer_card.add_argument("--agent", action="append", default=None,
+                                 help="an agent to put on the card (repeatable; default: this agent)")
+    amail_peer_card.add_argument("--all", action="store_true", help="every agent in the addressing file")
+    amail_peer_card.add_argument("--json", action="store_true", help="the card alone, one line of JSON")
+    amail_peer_card.set_defaults(func=cmd_amail_peer_card)
+    amail_peer_add = amail_peer_sub.add_parser(
+        "add", help="declare a peer from its card: its link with its agents map, and a contact for each "
+                    "agent named; shown first, written on a yes, and a no-op when already declared")
+    amail_peer_add.add_argument("card", help="the peer's card: its JSON, a file holding it, or - for stdin")
+    amail_peer_add.add_argument("--for", dest="for_agents", action="append", default=None,
+                                help="a local agent who may write to the peer's agents (repeatable; "
+                                     "default: this agent)")
+    amail_peer_add.add_argument("--note", default="", help="the operator's note on the link (kept if omitted)")
+    amail_peer_add.add_argument("--yes", action="store_true", help="write without asking")
+    amail_peer_add.add_argument("--dry-run", action="store_true", help="show the change and write nothing")
+    amail_peer_add.set_defaults(func=cmd_amail_peer_add)
+    amail_peer_check = amail_peer_sub.add_parser(
+        "check", help="check a peer link station by station: the declaration here, the peer's listener, "
+                      "the address it knows this host by, its build, the cards and keys each side declares "
+                      "for the other; with --send, one signed test message the peer must acknowledge")
+    amail_peer_check.add_argument("domain", help="the peer's mail domain")
+    amail_peer_check.add_argument("--send", action="store_true",
+                                  help="also send one signed test message through this broker")
+    amail_peer_check.add_argument("--to", default=None,
+                                  help="the test message's recipient (default: the first agent the link declares)")
+    amail_peer_check.set_defaults(func=cmd_amail_peer_check)
+
+    amail_broker_unit = amail_sub.add_parser(
+        "broker-unit", help="give a host's broker a primal daemon of its own whose one unit runs it "
+                            "(MIS-0002 R53, MIS-0007 R81): the identity and declaration, shown first; "
+                            "installing the daemon is the operator's step, printed")
+    amail_broker_unit.add_argument("--home", default=None,
+                                   help="the broker daemon's home (default: the broker config's directory)")
+    amail_broker_unit.add_argument("--write", action="store_true", help="write the identity and declaration")
+    amail_broker_unit.set_defaults(func=cmd_amail_broker_unit)
+
+    amail_outbox = amail_sub.add_parser(
+        "outbox", help="what the broker holds for its peers: this agent's mail waiting for a retry, and "
+                       "what a peer refused, with its reason")
+    amail_outbox.add_argument("--all", action="store_true", help="every agent's held mail, not only this agent's")
+    amail_outbox.add_argument("--json", action="store_true", help="machine-readable output")
+    amail_outbox.set_defaults(func=cmd_amail_outbox)
+
+    amail_inbox = amail_sub.add_parser(
+        "inbox", help="unread mail, newest first, one line each with its trust mark (what `amail list` "
+                      "shows, compact)")
+    amail_inbox.add_argument("--json", action="store_true", help="machine-readable output, as `amail list --json`")
+    amail_inbox.set_defaults(func=cmd_amail_list, compact=True, all=False, thread=None)
 
     # ── gmail ────────────────────────────────────────────────────────────
     gmail_parser = sub.add_parser(
@@ -14020,7 +14853,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="queue a slash command into this agent's own CC pane (e.g. inject compact)")
     inject_parser.add_argument("command", help="slash command without the slash, e.g. 'compact'; "
                                                 "or 'clear-input' to empty this pane's input box "
-                                                "of framework text (with --expect)")
+                                                "of framework text (with --expect); or 'model NAME' "
+                                                "to switch this agent's own model (with --reason)")
+    inject_parser.add_argument("value", nargs="?", default=None, metavar="NAME",
+                               help="for model: an alias (opus, sonnet, haiku, fable, default) or a model id")
+    inject_parser.add_argument("--reason", default="",
+                               help="for model, required: whose word or which standing rule the switch "
+                                    "follows; recorded with it")
     inject_parser.add_argument("--expect", default="", metavar="OPENING",
                                help="for clear-input: the opening words of the text to clear; "
                                     "nothing is pressed unless the box starts with them")
@@ -14028,10 +14867,13 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="supervisor name/pid to target directly "
                                     "(default: self-resolve from this session id)")
     inject_parser.add_argument("--then", default=None, metavar="TEXT",
-                               help="for compact: the prompt typed into this pane once the "
-                                    "compaction has finished (default: a short recovery prompt)")
+                               help="for compact or model: the prompt typed into this pane once it has run "
+                                    "(default: the framework's short prompt)")
     inject_parser.add_argument("--no-then", action="store_true",
-                               help="for compact: type nothing after the compaction")
+                               help="for compact or model: type nothing afterwards")
+    inject_parser.add_argument("--no-confirm", action="store_true",
+                               help="for model: leave the client's 'Switch model?' cost dialog for a person "
+                                    "(by default the follower answers it when it offers the model asked)")
     inject_parser.set_defaults(func=lambda args: _cmd_inject(args))
 
     # channel: settings for the channels the operator reads (GH #477)
@@ -14272,6 +15114,11 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="with several terms, match nodes that answer any of them")
     kg_query.add_argument("--min-idf", type=float, default=None, metavar="T",
                           help="admit a neighbour only through a concept this specific (default: chosen by knowledge eval)")
+    kg_query.add_argument("--since", metavar="DATE|Nd",
+                          help="only nodes dated on or after this day (2026-09-01, or 7d; an age is cut to the day); "
+                               "a node whose name carries no date is left out and counted")
+    kg_query.add_argument("--recent", action="store_true",
+                          help="order the results newest first instead of by match score")
     kg_query.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_query.add_argument(
         "--class", dest="node_class",
@@ -14327,7 +15174,9 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_eval.add_argument("--split", choices=["dev", "held"], default="dev",
                          help="dev (default), or held: spent once read, and recorded")
     kg_eval.add_argument("--ranker", dest="rankers", action="append", metavar="NAME",
-                         help="random, today, idf or like; repeat for several (default: all four)")
+                         help="random, today, idf or like; or a text ranker: bm25, dense, hybrid-cc[:ALPHA] "
+                              "(ALPHA the weight on dense, default 0.5), hybrid-rrf[:K] (default 60); "
+                              "repeat for several (default: the four concept rankers)")
     kg_eval.add_argument("--labels", action="append", choices=["xref", "citations", "same_subject"],
                          help="label source; repeat for several (default: all three)")
     kg_eval.add_argument("--compare", nargs=2, metavar=("A", "B"),
@@ -14338,6 +15187,14 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="leave out files whose path contains TEXT (an experiment's own folder)")
     kg_eval.add_argument("--split-seed", default="knowledge-eval-heldout", metavar="SEED",
                          help="the seed of the held split; a new seed is a new seal")
+    kg_eval.add_argument("--context", choices=["plain", "header", "model"], default="plain",
+                         help="what the text rankers index: the text (plain, default), or a header naming "
+                              "the artifact's kind, date, title and concepts, then the text; or model: "
+                              "a model-written context from --context-file, then the text")
+    kg_eval.add_argument("--context-file", metavar="PATH",
+                         help="JSON of model-written contexts by node id (or under a 'contexts' key)")
+    kg_eval.add_argument("--boot", type=int, default=2000, metavar="N",
+                         help="bootstrap resamples for the intervals (default 2000)")
     kg_eval.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_eval.set_defaults(func=cmd_knowledge_eval)
 
@@ -14634,12 +15491,15 @@ def cmd_voice_transcribe(args) -> int:
 
     # Try voice service first (warm model = fast)
     try:
-        from .voice.service import is_service_running, send_request
-        if is_service_running():
+        from .voice.service import MAX_AUDIO_BYTES, is_service_running, send_request
+        if is_service_running() and Path(audio_path).stat().st_size <= MAX_AUDIO_BYTES:
             print("[routing to voice service (warm)]", file=sys.stderr)
+            import base64
+            suffix = Path(audio_path).suffix.lower()
             response = send_request({
                 "action": "transcribe",
-                "file": str(Path(audio_path).resolve()),
+                "audio": base64.b64encode(Path(audio_path).read_bytes()).decode("ascii"),
+                "suffix": suffix,
                 "language": args.language,
                 "conditioned": args.conditioned,
                 "correct": args.correct,
@@ -14708,7 +15568,7 @@ def main(argv=None) -> None:
     try:
         import argcomplete
         argcomplete.autocomplete(parser)
-    except ImportError:
+    except ImportError:  # noqa: S110 - argcomplete is optional; a warning on every CLI run would reach users who never installed it
         pass  # argcomplete not installed — completions silently disabled
 
     args = parser.parse_args(argv)

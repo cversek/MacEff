@@ -1,0 +1,3 @@
+### Fixed
+
+- **`amail contacts` shows a refusal instead of an empty list** (`macf/cli.py`): the broker answers an operation it doesn't know, or an agent it won't serve, with an error reply, and the command read that reply as "no correspondents are declared for this agent", printing none and a true `contact_list`. On a broker started before the operation existed, an agent with three declared correspondents was told it had none. The command now prints the broker's reason, adds that the broker needs a restart when the operation is unknown, and exits 1; `--json` prints `ok: false` with the error and the hint.

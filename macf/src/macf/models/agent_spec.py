@@ -589,7 +589,7 @@ class AgentSpec(BaseModel):
             "first six characters of the agent's identity file. Container start-up writes it into "
             "the agent's home as agent_identity.calling_card in .maceff/config.json, where the "
             "primal daemon reads it, and refuses to overwrite a different card already there. "
-            "Required with primal_daemon (persistent_layer 10.1)."
+            "Required with primal_daemon (persistent_layer 2.1)."
         ),
     )
 
@@ -599,7 +599,7 @@ class AgentSpec(BaseModel):
             "Where this agent's session starts in a container, which is also the directory its "
             "conversation is kept under. Absent: the agent's active_project link when it has "
             "assigned projects, else its home, as the login shell has always used, so a seat moved "
-            "onto its daemon continues the same conversation (persistent_layer 10.1)."
+            "onto its daemon continues the same conversation (persistent_layer 2.1)."
         ),
     )
 
@@ -614,7 +614,7 @@ class AgentSpec(BaseModel):
         description=(
             "Why this agent runs without a primal daemon in a container, where every agent that "
             "isn't vanilla gets one by default. Start-up logs the reason at every start. A reason "
-            "is required, so an agent left off the default says why (persistent_layer 10.1)."
+            "is required, so an agent left off the default says why (persistent_layer 2.1)."
         ),
     )
 
@@ -671,7 +671,8 @@ class AgentSpec(BaseModel):
             return self.calling_card
         return key if CARD_NAME.fullmatch(key) else None
 
-    def effective_primal_daemon(self, key: str, *, mail: bool) -> Optional[Dict[str, Any]]:
+    def effective_primal_daemon(self, key: str, *, mail: bool,
+                                container_env: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
         """The declaration body a container renders for this agent: the default session
         (``pd.default_declaration.container_body``) with whatever ``primal_daemon`` declares laid
         over it (``merged_body``). None for a vanilla account or an opt-out. *mail* is whether the
@@ -688,7 +689,7 @@ class AgentSpec(BaseModel):
         default = container_body(account=self.username, harness_session=self.harness_session or key,
                                  project_dir=project, channels=channels, mail=mail,
                                  memory_limit_mb=self.session_memory_mb,
-                                 timezone=deployment_timezone())
+                                 timezone=deployment_timezone(), container_env=container_env)
         return merged_body(default, self.primal_daemon)
 
     @model_validator(mode='after')
@@ -877,7 +878,10 @@ class DefaultsConfig(BaseModel):
             "manual /etc/environment writes — keep these declarative here "
             "instead. Per-agent overrides intentionally not supported in v1: "
             "container env is process-wide; per-user env belongs in "
-            "~/.bash_init.sh which already exists."
+            "~/.bash_init.sh which already exists. The default daemon-run "
+            "session carries these too (#895): a PATH adds its directories, "
+            "without any $PATH, ahead of the system's; any other variable is "
+            "added unless the session already sets it."
         )
     )
 
@@ -1154,7 +1158,8 @@ class AgentsConfig(BaseModel):
         daemon would refuse is named here, by agent, rather than costing that agent its daemon
         at start."""
         for name, spec in self.agents.items():
-            body = spec.effective_primal_daemon(name, mail=self.runs_mail())
+            body = spec.effective_primal_daemon(name, mail=self.runs_mail(),
+                                                container_env=self.defaults.container_env if self.defaults else None)
             if body is None:
                 continue
             try:

@@ -6,8 +6,8 @@ DEV_DRV start tracking + full temporal + token/CL awareness injection.
 EXPERIMENT: Claude-mem associative memory injection (Cycle 337)
 """
 import json
+import re
 import os
-import subprocess
 import sys
 import time
 import traceback
@@ -45,40 +45,36 @@ from macf.channels.channel_tag import CHANNEL_SOURCE, is_maceff_notice, opening_
 # (clock, breadcrumb, CL); diffing them would report a change every time.
 UPS_VOLATILE = ("Current Time:", "Breadcrumb:", "Tokens Used:", "CL Level:", "Remaining:", "Weekly usage:")
 
-# EXPERIMENT: Memory injection script path (Cycle 337)
-MEMORY_RECALL_SCRIPT = Path(__file__).parent.parent.parent / "agent/public/experiments/2026-01-15_140000_001_Claude-Mem_Associative_Injection/artifacts/memory-recall.py"
+#: How much earlier than a message's own time a downloaded voice file may be and still be its audio.
+_VOICE_CLOCK_SLACK_S = 5.0
 
-def get_memory_injection(prompt: str) -> str:
-    """
-    Query claude-mem for associative memories relevant to the prompt.
 
-    EXPERIMENT (Cycle 337): Testing whether injected memories feel more
-    like "remembering" than explicit tool calls.
+def voice_file_for_message(prompt: str, now_inbox: Optional[Path] = None) -> Optional[Path]:
+    """The downloaded audio of the voice message in ``prompt``, or None when it isn't downloaded yet.
 
-    Returns empty string on any failure (graceful degradation).
-    """
-    if not MEMORY_RECALL_SCRIPT.exists():
-        return ""
-
-    if len(prompt) < 10:  # Skip very short prompts
-        return ""
-
+    The newest ``.oga`` in an inbox is not necessarily this message's: the hook usually runs before the
+    message is downloaded, and an older voice file then sat newest, so a clip from months before was
+    transcribed as the message (#1079). A file counts only when it was written at or after the
+    message's own ``ts``, and the oldest such file is taken: a later voice message's file is written after
+    this one's. The inbox is the plugin's state directory: ``TELEGRAM_STATE_DIR``, else the
+    account default."""
+    import datetime as _dt
+    m = re.search(r'\bts="([^"]+)"', prompt)
+    if not m:
+        return None
     try:
-        result = subprocess.run(
-            [sys.executable, str(MEMORY_RECALL_SCRIPT)],
-            input=json.dumps({"prompt": prompt}),
-            capture_output=True,
-            text=True,
-            timeout=0.2  # 200ms hard timeout
-        )
-
-        if result.returncode == 0 and result.stdout.strip():
-            output = json.loads(result.stdout)
-            return output.get("additionalContext", "")
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
-        pass  # Fail silently - don't block session
-
-    return ""
+        sent = _dt.datetime.fromisoformat(m.group(1).replace("Z", "+00:00")).timestamp()
+    except ValueError as e:
+        print(f"⚠️ MACF: voice message time unreadable ({e}); not guessing its audio file", file=sys.stderr)
+        return None
+    state = os.environ.get("TELEGRAM_STATE_DIR")
+    inbox = now_inbox or ((Path(state) if state else Path.home() / ".claude" / "channels" / "telegram") / "inbox")
+    try:
+        fresh = [f for f in inbox.glob("*.oga") if f.stat().st_mtime >= sent - _VOICE_CLOCK_SLACK_S]
+    except OSError as e:
+        print(f"⚠️ MACF: voice inbox unreadable ({e})", file=sys.stderr)
+        return None
+    return min(fresh, key=lambda f: f.stat().st_mtime) if fresh else None
 
 
 #: How much of the transcript's end is read to find the entry for a prompt.
@@ -110,7 +106,7 @@ def scheduled_prompt(prompt: str, transcript_path: Optional[str]) -> bool:
             continue
         try:
             entry = json.loads(line)
-        except ValueError:
+        except ValueError:  # noqa: S112 - the window's first line is cut mid-object on every read, so a warning would fire on every prompt
             continue  # only the window's first line can be cut short
         message = entry.get("message")
         if entry.get("type") == "user" and isinstance(message, dict) \
@@ -323,6 +319,13 @@ def run(stdin_json: str = "", **kwargs) -> Dict[str, Any]:
         # staleness from the event log, so this render and the ones after it
         # agree with the event that produced them (#181).
         recorded = record_user_activity_from_payload(prompt, transcript_path)
+        try:
+            from macf.agent_events_log import append_event as _append_cause
+            from macf.usage_meter import classify_prompt
+            _append_cause("turn_cause", {"cause": classify_prompt(prompt or "")})
+        except (ImportError, OSError, ValueError, TypeError) as _ce:
+            emit_warning(Warning(source="user_prompt_submit", kind="turn_cause_failed",
+                                 detail=f"turn cause not recorded ({_ce}); usage metering will read the previous cause"))
         record_channel_receipt(prompt)
 
         # USER_REMOTE auto-restore: a prompt the operator typed at the keyboard means
@@ -387,20 +390,13 @@ Breadcrumb: {breadcrumb}"""
         voice_transcript = ""
         if prompt and 'attachment_kind="voice"' in prompt:
             try:
-                import re
                 file_id_match = re.search(r'attachment_file_id="([^"]+)"', prompt)
                 if file_id_match:
                     file_id = file_id_match.group(1)
-                    # Check if we have a downloaded file in the inbox
-                    import glob
-                    inbox = Path.home() / ".claude" / "channels" / "telegram" / "inbox"
-                    # Find the most recent .oga file (Telegram voice format)
-                    oga_files = sorted(inbox.glob("*.oga"), key=lambda f: f.stat().st_mtime, reverse=True)
-                    if oga_files:
-                        latest_voice = str(oga_files[0])
-                        # Try to transcribe directly
+                    latest_voice = voice_file_for_message(prompt)
+                    if latest_voice:
                         from macf.voice.transcribe import transcribe
-                        result = transcribe(audio_path=latest_voice, language="en")
+                        result = transcribe(audio_path=str(latest_voice), language="en")
                         voice_transcript = (
                             f"\n🎤 VOICE TRANSCRIPTION (auto):\n"
                             f"[{result.engine}/{result.model} | "
@@ -409,7 +405,7 @@ Breadcrumb: {breadcrumb}"""
                             f'"{result.text}"\n'
                         )
                     else:
-                        # No downloaded file yet — instruct agent to download and transcribe
+                        # This message's audio isn't downloaded yet: say how to fetch it (#1079).
                         voice_transcript = (
                             f"\n🎤 VOICE MESSAGE DETECTED: Use `mcp__plugin_telegram_telegram__download_attachment` "
                             f"with file_id `{file_id}`, then `macf_tools voice transcribe <path>` to transcribe.\n"
@@ -419,11 +415,6 @@ Breadcrumb: {breadcrumb}"""
 
         # Get boundary guidance (if CL ≤ 10)
         boundary_guidance = get_boundary_guidance(token_info['cl_level'], auto_mode)
-
-        # EXPERIMENT: Get associative memory injection (Cycle 337)
-        # DISABLED: Testing if this causes CL 17 limit
-        # Note: prompt already extracted above for prompt_preview
-        memory_injection = ""  # get_memory_injection(prompt)
 
         # Per-prompt policy-recommendation injection removed (GH#211). Policy
         # discovery in MacEff is pull, not push: agents consult the corpus on
@@ -452,7 +443,6 @@ Breadcrumb: {breadcrumb}"""
             token_section,
             voice_transcript if voice_transcript else "",  # Voice auto-transcription
             boundary_guidance if boundary_guidance else "",
-            memory_injection if memory_injection else "",  # EXPERIMENT: associative memories
             focus_line,
             footer
         ]

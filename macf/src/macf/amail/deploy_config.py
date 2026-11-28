@@ -32,7 +32,7 @@ import yaml
 from pydantic import (BaseModel, ConfigDict, Field, field_validator,
                       model_validator)
 
-from macf.amail.broker import BrokerConfig, SharedHandoff
+from macf.amail.broker import BrokerConfig, PeerLink, SharedHandoff
 
 
 #: What a broker consults to know it is inside a container: the file Docker
@@ -319,14 +319,6 @@ class AgentAddressing(AgentBinding):
                     "exception is visible to whoever reads about it.")
 
 
-#: Supervision values MIS-0002 retired, mapped to their current name. The old
-#: name keeps meaning the new one (MIS-0002-R76), so a deployment that already
-#: wrote it does not strand on a rename.
-_RETIRED_SUPERVISION_VALUES = {
-    "hypervisor": "primal-daemon",
-}
-
-
 def _require_zone_cards(addressing: "AddressingConfig") -> None:
     """Under a zone every agent needs a card the broker can use, or its zone mail would be
     refused as not ours with no word at all. Refuse the start and name them instead."""
@@ -394,7 +386,7 @@ def _refuse_double_claims(addressing: "AddressingConfig", peers: Dict[str, Any])
     for name, b in addressing.agents.items():
         try:
             local = local_part_from_card(b.card or agent_card(b.home), b.zone_token)
-        except (IdentityError, ValueError):
+        except (IdentityError, ValueError):  # noqa: S112 - _require_zone_cards already refused this agent
             continue   # _require_zone_cards has already refused this agent
         claims.setdefault(local, []).append(f"local agent '{name}'")
     missing = []
@@ -450,22 +442,12 @@ class AddressingConfig(BaseModel):
     supervision: Optional[str] = Field(
         default=None,
         description="who or what watches a host-tier deployment: "
-                    "`operator-at-terminal` or `primal-daemon`. The retired "
-                    "name `hypervisor` is still accepted and read as "
-                    "`primal-daemon` (MIS-0002-R76). Required under "
+                    "`operator-at-terminal` or `primal-daemon`. Required under "
                     "`tier: host`; `none` is refused, because the tier's "
                     "justification is supervision and a file may not declare "
                     "the tier while declaring the justification absent.")
     agents: Dict[str, AgentAddressing] = Field(
         description="address local-part -> agent")
-
-    @field_validator("supervision")
-    @classmethod
-    def _normalize_retired_supervision(cls, v: Optional[str]) -> Optional[str]:
-        """Read a retired supervision value as its current name (MIS-0002-R76)."""
-        if v is None:
-            return v
-        return _RETIRED_SUPERVISION_VALUES.get(v.strip().lower(), v)
 
     @field_validator("agents")
     @classmethod
@@ -531,6 +513,79 @@ class PeerAgent(BaseModel):
 
     card: str
     zone_token: Optional[str] = None
+
+
+def _require_private(addr, shown: str) -> None:
+    """A peer link is a private-network link (MIS-0004 R56, R58): private, loopback or tailnet
+    (100.64.0.0/10) addresses only, so a public address is a typo or a mistake, not a peer."""
+    import ipaddress
+    if addr.is_unspecified or addr.is_multicast:
+        raise ValueError(f"{shown!r} is not an address a peer can be reached at")
+    tailnet = ipaddress.ip_network("100.64.0.0/10")
+    if not (addr.is_private or addr.is_loopback or (addr.version == 4 and addr in tailnet)):
+        raise ValueError(f"{shown!r} is not a private address: a peer link is for a private network "
+                         f"(private, loopback or tailnet 100.64.0.0/10), never the public Internet "
+                         f"(MIS-0004 R56, R58)")
+
+
+class PeerLinkDecl(BaseModel):
+    """One peer broker reachable over a private network (rung 2, MIS-0004 R56).
+
+    Keyed by the peer's MAIL DOMAIN in `BrokerDeployConfig.peer_links`. `host` is the peer's
+    private ADDRESS, never a name and never an every-interface address: a connection to it carries
+    our mail, and a connection from it is the only one our listener treats as that peer's."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = Field(description="the peer's private IP address (a tailnet address, for example)")
+    port: int = Field(ge=1, le=65535, description="the port the peer's listener answers on")
+    note: str = Field(default="", description="free text for the operator")
+    agents: Dict[str, str] = Field(
+        default_factory=dict,
+        description="the peer's agents: the address local part -> the agent's calling card. A peer "
+                    "message's signature is judged against the registry key of the card its sender "
+                    "names (MIS-0004 R44); a peer that declares none has all its mail read unverified.")
+
+    @field_validator("agents")
+    @classmethod
+    def _cards_are_cards(cls, v: Dict[str, str]) -> Dict[str, str]:
+        from .zone import local_part_from_card
+        for box, card in v.items():
+            local_part_from_card(card)          # ValueError names the bad card
+        return v
+
+    @field_validator("host")
+    @classmethod
+    def _host_is_a_private_address(cls, v: str) -> str:
+        import ipaddress
+        try:
+            addr = ipaddress.ip_address(v.strip())
+        except ValueError as e:
+            raise ValueError(f"{v!r} is not an IP address; a peer link names an address, not a name") from e
+        _require_private(addr, v)
+        return str(addr)
+
+
+class PeerListenDecl(BaseModel):
+    """Where this broker listens for its peers (R58): one declared private address, never every interface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = Field(description="the one private address to bind, e.g. this machine's tailnet address")
+    port: int = Field(ge=1, le=65535)
+
+    @field_validator("host")
+    @classmethod
+    def _host_is_one_address(cls, v: str) -> str:
+        import ipaddress
+        try:
+            addr = ipaddress.ip_address(v.strip())
+        except ValueError as e:
+            raise ValueError(f"{v!r} is not an IP address") from e
+        if addr.is_unspecified:
+            raise ValueError("a peer listener never binds every interface (MIS-0004 R58)")
+        _require_private(addr, v)
+        return str(addr)
 
 
 class SharedHandoffDecl(BaseModel):
@@ -694,6 +749,18 @@ class BrokerDeployConfig(BaseModel):
         description="rung 1s, receiving side: how often the broker sweeps its "
                     "own peer intake (handoff/_peers/<domain>/) and accepts "
                     "what peer brokers wrote there through the inbound path.")
+    peer_links: Dict[str, PeerLinkDecl] = Field(
+        default_factory=dict,
+        description="rung 2: peer brokers reachable over a private network, keyed by mail domain "
+                    "(MIS-0004 R56 to R64). A recipient under one of these domains is sent to the peer's "
+                    "listener and kept until the peer acknowledges. Authorization is unchanged: the "
+                    "sender's contacts decide here, the recipient's own book decides at the peer. "
+                    "Declaring this deployment's own domain, or a domain also in shared_handoffs, is "
+                    "refused.")
+    peer_listen: Optional[PeerListenDecl] = Field(
+        default=None,
+        description="rung 2, receiving side: the one private address this broker's listener binds. "
+                    "Without it nothing listens, and without peer_links the listener would accept none.")
     trust_bundle: Optional[Path] = Field(
         default=None,
         description="the pinned trust bundle (MIS-0004 R34): a file of the CA certificates the "
@@ -764,6 +831,19 @@ class BrokerDeployConfig(BaseModel):
                                         gid=decl.gid, note=decl.note,
                                         agents={box: (h.card, h.zone_token) if isinstance(h, PeerAgent) and h.zone_token else (h.card if isinstance(h, PeerAgent) else h)
                                                 for box, h in decl.agents.items()})
+        peers = {}
+        for dom, decl in self.peer_links.items():
+            key = dom.strip().lower()
+            if key == addressing.domain.strip().lower():
+                raise ConfigError(f"peer_links declares '{dom}', which is this deployment's own domain; "
+                                  f"our own agents are rung 1, never a peer")
+            if key in shared:
+                raise ConfigError(f"'{dom}' is declared in both shared_handoffs and peer_links; a peer is "
+                                  f"reached by one rung, and the filesystem would win silently")
+            if key in peers:
+                raise ConfigError(f"peer_links has '{dom}' declared twice (domains are matched without regard to "
+                                  f"case); keep one entry")
+            peers[key] = PeerLink(host=decl.host, port=decl.port, note=decl.note, agents=dict(decl.agents))
         if addressing.zone:
             _require_zone_cards(addressing)
             _require_own_login(addressing)
@@ -772,6 +852,8 @@ class BrokerDeployConfig(BaseModel):
             domain=addressing.domain,
             zone=addressing.zone,
             shared_handoffs=shared,
+            peer_links=peers,
+            peer_listen=((self.peer_listen.host, self.peer_listen.port) if self.peer_listen else None),
             shared_sweep_seconds=self.shared_sweep_seconds,
             agent_homes={name: b.home for name, b in addressing.agents.items()},
             agent_cards={name: b.card for name, b in addressing.agents.items() if b.card},

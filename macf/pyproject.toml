@@ -12,11 +12,11 @@ authors = [{ name = "Craig Versek" }]
 dependencies = [
     "PyYAML>=6.0.0",  # Required for task system YAML parsing
     "pydantic>=2.0.0",  # Core: task/agent/project model validation, imported at CLI startup
-    # Every daemon's event stream is its own MQTT broker (persistent_layer 11.4): the client, and
+    # Every daemon's event stream is its own MQTT broker (persistent_layer 3.4): the client, and
     # the library each daemon makes its own certificate authority and certificate with.
     # mosquitto, the broker itself, is a host package.
     "paho-mqtt>=2.0",
-    "cryptography>=40.0.0",
+    "cryptography>=42.0",  # not_valid_after_utc (pd.broker_defaults) arrived in 42
 ]
 
 [project.optional-dependencies]
@@ -31,6 +31,7 @@ test = [
     "psutil>=5.9.0",  # For performance testing
     "pydantic>=2.0.0",  # For agent/project spec validation tests
     "lancedb>=0.26.0",  # For hybrid search / recommend tests
+    "numpy>=1.24",  # knowledge eval's dense ranker; arrived only through lancedb, so declared where a test imports it
     "tomli>=2.0.0; python_version < '3.11'",  # pyproject introspection in test_ci_extras_coverage (tomllib is 3.11+)
     "PyJWT>=2.0.0",  # the ingest receiver imports it at module scope; its drain-coupling logic is under test
     "markdown>=3.0",  # markdown present's heading rule is under test; without it the renderer falls back to <pre>
@@ -68,7 +69,7 @@ recommend = [
 # classify every message as unverified while appearing to work. A capability
 # that is off is honest; one that is present-but-hollow is not.
 amail = [
-    "cryptography>=40.0.0",  # Ed25519 per-correspondent authorship signing
+    "cryptography>=42.0",  # Ed25519 per-correspondent authorship signing
 ]
 
 [project.scripts]

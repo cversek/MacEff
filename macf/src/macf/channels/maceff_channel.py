@@ -1,7 +1,7 @@
 """The MacEff channel: notices from an agent's primal daemon, delivered into its live
 Claude Code session as channel events instead of typed keystrokes.
 
-MIS-0002 section 6.14. A channel event that reaches an idle session starts a turn, and
+MIS-0002 section 6.2.3. A channel event that reaches an idle session starts a turn, and
 Claude Code sets its source from this server's configured name, never from the text.
 That is a wake that reads no screen, which is why it comes first and the keystroke wake
 is the fallback (MIS-0002-R104 (adapter_MUST_deliver_through_channel)).
@@ -80,7 +80,7 @@ DAEMON_POINTERS: Dict[str, str] = {
     # MIS-0002-R60 (pd_MUST_notice_limit_exceeded)
     "pd_limit_exceeded": "A unit of yours is past its declared memory limit. Run `macf_tools pd status`; "
                          "the event log's pd_unit_over_limit entry names the unit, its use and its limit.",
-    # A unit that failed, under its restart policy (persistent_layer 10.2)
+    # A unit that failed, under its restart policy (persistent_layer 2.2)
     "pd_unit_failed": "A unit of yours failed: it exited with a failing code, missed its liveness, or "
                       "couldn't start. This notice's id is the unit, its failures in a row and an epoch "
                       "second, and a newer failure of the same unit replaces one not yet delivered. Run "
@@ -114,6 +114,10 @@ DAEMON_POINTERS: Dict[str, str] = {
     # A duty's crossing, hosted by the daemon (the scheduler design, section 4.4)
     "pd_duty_due": "A duty of yours became due soon or overdue. Run `macf_tools role calendar`; the event "
                    "log's duty_tier_crossed entry names the duty and its tier.",
+    # The login warning (#1161): the warning window, one day, and the end
+    "pd_login_expiring": "Your Claude login is near the end of its refresh grant, or past it. Run "
+                         "`macf_tools pd login`; it gives the time left. Only a person can renew it, by "
+                         "running /login in your session, so tell the operator now, with that time.",
     # MIS-0002-R55 (unread_mail_MUST_raise_notice)
     "pd_unread_mail": "Mail has waited in your pickup box past your declared threshold. Run "
                       "`macf_tools amail list` to read it; the event log's pd_unread_mail entry says how long.",
@@ -136,7 +140,7 @@ class NoticeRecord(BaseModel):
 
     source: Literal["amail", "pd_limit_exceeded", "pd_grant_denied", "pd_carried", "pd_unread_mail",
                     "pd_run_failed", "pd_run_missed", "pd_schedule_changed", "pd_entry_due", "pd_duty_due",
-                    "pd_unit_failed"]
+                    "pd_unit_failed", "pd_login_expiring"]
     arrival_id: str = Field(pattern=r"^[A-Za-z0-9._:-]{1,128}$")
     count: Optional[int] = Field(default=None, ge=0)
     read_at: float
@@ -213,6 +217,11 @@ def verify_peer(conn: socket.socket, daemon: DaemonRecord) -> bool:
     return verify_incarnation(peer.pid, daemon.proc_start)
 
 
+class SessionWriteFailed(Exception):
+    """A notice could not be written to the session (#1158): the session's end, not the daemon's. Not an
+    OSError, so pump's catch for a reset daemon connection can't take it for one."""
+
+
 class Channel:
     """The server: MCP over stdin and stdout, the daemon over a Unix socket."""
 
@@ -261,14 +270,24 @@ class Channel:
         """Deliver every record on one connection until the daemon closes it; return how
         many were delivered."""
         delivered = 0
-        with conn, conn.makefile("r", encoding="utf-8") as lines:
-            for line in lines:
-                if not line.strip():
-                    continue
-                record = parse_record(line)
-                if record is not None:
-                    self.send(build_event(record))
-                    delivered += 1
+        try:
+            with conn, conn.makefile("r", encoding="utf-8") as lines:
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    record = parse_record(line)
+                    if record is not None:
+                        try:
+                            self.send(build_event(record))
+                        except OSError as e:
+                            raise SessionWriteFailed(f"the channel could not write a notice to its session: "
+                                                     f"{type(e).__name__}: {e}") from e
+                        delivered += 1
+        except OSError as e:
+            # A daemon that dies mid-connection resets the socket rather than closing it. That ends
+            # this connection, as a close does, and what was delivered before it still counts (#1156).
+            print(f"⚠️ MACF: channel's daemon connection failed after {delivered} notice(s): "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
         print("⚠️ MACF: channel lost its daemon connection (reconnecting)", file=sys.stderr)
         return delivered
 
@@ -276,14 +295,22 @@ class Channel:
         """Reconnect for the life of the session, always waiting first. A daemon that refuses
         this channel accepts the connection and closes it at once; reconnecting at once after
         that ran a refused channel at about 600 connections a second, measured on a host
-        where a second session's channel met the lineage check."""
+        where a second session's channel met the lineage check.
+
+        Every exception from one attempt is said and survived (#1156). This loop is the channel's
+        only link to its daemon and runs in a daemon thread: an exception it let out ended the
+        thread for good, while the process went on serving MCP and the client still listed the
+        channel as connected, so every notice fell to the keystroke fallback for days."""
         backoff = _BACKOFF_FIRST
         while True:
-            conn = self.connect_once()
-            if conn is not None:
-                started = clock()
-                if self.pump(conn) or clock() - started >= _HEALTHY_S:
-                    backoff = _BACKOFF_FIRST
+            try:
+                conn = self.connect_once()
+                if conn is not None:
+                    started = clock()
+                    if self.pump(conn) or clock() - started >= _HEALTHY_S:
+                        backoff = _BACKOFF_FIRST
+            except Exception as e:  # noqa: BLE001 - GUARD: said on stderr, then the loop backs off and reconnects; letting it out kills the only daemon link silently
+                print(f"⚠️ MACF: channel: {type(e).__name__}: {e}; reconnecting", file=sys.stderr)
             sleep(backoff)
             backoff = min(backoff * 2, _BACKOFF_MAX)
 
