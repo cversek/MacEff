@@ -1,0 +1,6 @@
+# Run outputs hold a seat's private text and ids. Only figures leave a host, and only by being posted.
+*.npy
+snapshot.json
+seal.json
+results.json
+cost.json
