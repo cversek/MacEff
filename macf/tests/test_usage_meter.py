@@ -552,3 +552,21 @@ def test_skipped_event_is_written_once_across_ticks(tmp_path):
         um.meter_tick("sid", str(t))
         _write(t, _line(f"m{i + 1}"))
     assert len(list(read_events(reverse=False, scope="all", only=um.SKIPPED_EVENT))) == 1
+
+
+def test_a_call_copied_into_a_fork_file_counts_once(tmp_path):
+    """A fork's transcript opens with the parent's last call, same id: the session counts it once,
+    whether the original was metered in an earlier tick or in the same one."""
+    t = tmp_path / "s.jsonl"
+    _write(t, _line("a"))
+    um.meter_tick("sid", str(t))  # baseline
+    _write(t, _line("p", output_tokens=7))
+    um.meter_tick("sid", str(t))  # the parent's call, metered on its own
+    sub = tmp_path / "sid" / "subagents"
+    sub.mkdir(parents=True)
+    _write(sub / "f1.jsonl", _line("p", output_tokens=7, ts="2099-01-01T00:00:00Z"), _line("f1"))
+    _write(t, _line("q"))
+    _write(sub / "f2.jsonl", _line("q", ts="2099-01-01T00:00:00Z"), _line("f2"))
+    assert um.meter_tick("sid", str(t)) == {"events": 3, "calls": 3}  # q in main, f1 and f2 in the forks
+    counted = [m for e in _metered() for m in e.get("ids") or ()]
+    assert sorted(counted) == ["f1", "f2", "p", "q"]

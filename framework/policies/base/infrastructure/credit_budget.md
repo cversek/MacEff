@@ -45,6 +45,7 @@ intends for them. This policy says where the numbers come from, what may be kept
 - When do the hooks sample on their own, and when do they never touch a credential?
 - What happens when a refresh fails, and how long do the hooks wait before asking again?
 - What does the weekly field show when its refresh is failing, or its week has reset since the sample?
+- What does `me 0.9%/1h` after the weekly field mean, and why can it never exceed the account?
 
 **4 Intent: conserve, normal, burn**
 - What does each mode promise?
@@ -136,6 +137,21 @@ pace. A sample over an hour old says so: `wk 38% (2.4%/hr, 3h old)`. When the re
 the field says why and what to run: `wk 38% (57h old: endpoint 429; budget sample --manual)`. Once the sample's week
 has reset, its percentage and rate describe a window that is over, so the field shows neither:
 `wk reset since the last sample (3h old)`.
+
+**The own share** follows the weekly field once the agent's usage meter has counted calls: `· me 0.9%/1h`, the
+points this agent spent over the last hour. The window is written out because it is not the weekly field's: that
+rate is smoothed over two hours, this is a plain one-hour sum, so the two disagree during a burst and neither is
+wrong. Points come from the agent's metered tokens times a rate fitted against the account's counter
+(`budget rate`), and the same fit sets how much a cache read weighs against fresh input. The price list says a
+tenth; the counter has shown cache reads costing a small fraction of that, and at a tenth an hour of subagents
+re-reading a large context was once metered at more points than the whole account moved. An agent's figure is
+never shown above the account's own rise over the same hour plus one point (the counter's whole-percent step):
+above that it is capped and marked `≤`, as in `me ≤3.0%/1h`, and read as an upper bound. `~` marks the provisional
+rate, used until a fit exists, and `part` an hour not fully metered. `budget me` shows the same share over any
+window, says when it was capped, and puts the rest of the account's movement down to other agents and unmetered
+use, which can then be no lower than minus one point. Calls are placed at their own times: an event that gathered
+calls across a window's edge counts only the part inside, and a call copied into a forked subagent's transcript is
+counted once.
 
 The hooks refresh the sample themselves at most every ten minutes (`MACEFF_BUDGET_AUTOSAMPLE_MIN`) with a short
 timeout, and **only for an agent that has sampled in the last week**: an installation that never asked for its budget

@@ -19,6 +19,19 @@ Counting rules:
   id. The tail call's growth after the first scan is not recounted: a small, one-sided
   undercount, preferred to a double count.
 - Only complete lines are consumed. A trailing partial line is left for the next scan.
+- A call is counted once across all the files of a session. A forked subagent's transcript
+  opens with a copy of the parent's last call, id and usage included, so the same id can sit
+  in the main transcript and a subagent file. Each event records the ids it counted (``ids``).
+  A tick scans and records the main transcript first; a subagent file skips any id counted by
+  an event of the same session in the last ``DEDUP_HORIZON_S``, or by a file scanned before it
+  in the tick. The original is written to the main transcript before the fork's file
+  exists, and the copy seconds later, so the copy is always the one met second and an hour is
+  ample. The session's ids are read only on a tick that scans a subagent file.
+
+Time of a call: an event records the first and last call times it counted (``first_ts``,
+``last_ts``). A reader that asks what fell inside a window prorates the event's tokens and
+calls evenly across that span (``fraction_in``) instead of crediting all of it to one moment:
+an event can gather tens of minutes of calls when ticks are sparse.
 
 Cause of an interval (``operator``, ``channel``, ``peer``, ``cron``, ``notice``, ``gate``,
 ``subagent``) comes from ``classify_prompt`` at prompt time and ``current_cause`` at meter
@@ -42,6 +55,7 @@ FAULT_EVENT = "usage_meter_fault"
 CHECKED_EVENT = "usage_meter_checked"
 TOOL_EVENT = "tool_call_completed"
 FAULT_REPEAT_S = 3600.0
+DEDUP_HORIZON_S = 3600.0
 MAIN_CHECK_EVERY_S = 600.0
 
 #: Weights relative to one uncached input token, and the fitted points per weighted token.
@@ -106,6 +120,7 @@ class ScanResult:
     first_ts: Optional[str] = None
     last_ts: Optional[str] = None
     tail_id: Optional[str] = None
+    ids: tuple = ()  # the message ids counted, for the cross-file check
 
 
 def _blank() -> Dict[str, int]:
@@ -130,10 +145,11 @@ def _usage_row(usage: dict) -> Dict[str, int]:
     }
 
 
-def scan(path, offset: int = 0, skip_id: Optional[str] = None) -> ScanResult:
+def scan(path, offset: int = 0, skip_id: Optional[str] = None, exclude: frozenset = frozenset()) -> ScanResult:
     """Total the API calls in the transcript at ``path`` from byte ``offset``.
 
     ``skip_id`` is the previous scan's ``tail_id``: lines for that call are not counted again.
+    ``exclude`` holds ids already counted from another file of the session; they are skipped too.
     """
     path = Path(path)
     size = path.stat().st_size
@@ -162,7 +178,7 @@ def scan(path, offset: int = 0, skip_id: Optional[str] = None) -> ScanResult:
         if entry.get("type") != "assistant" or not isinstance(msg, dict) or not isinstance(msg.get("usage"), dict):
             continue
         mid = msg.get("id") or f"line@{pos}"
-        if mid == skip_id:
+        if mid == skip_id or mid in exclude:
             continue
         if mid not in calls:
             order.append(mid)
@@ -178,7 +194,8 @@ def scan(path, offset: int = 0, skip_id: Optional[str] = None) -> ScanResult:
     stamps = [calls[m]["ts"] for m in order if calls[m]["ts"]]
     return ScanResult(by_model=by_model, calls=len(order), new_offset=offset + end,
                       first_ts=min(stamps) if stamps else None, last_ts=max(stamps) if stamps else None,
-                      tail_id=order[-1] if order else skip_id)
+                      tail_id=order[-1] if order else skip_id,
+                      ids=tuple(m for m in order if not m.startswith("line@")))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -413,7 +430,19 @@ def _emit(session_id: str, path: str, point: "_Resume", res: ScanResult, cause: 
         "session_id": session_id, "path": path, "offset": point.offset, "new_offset": res.new_offset,
         "first_ts": res.first_ts, "last_ts": res.last_ts, "by_model": res.by_model,
         "calls": res.calls, "cause": cause, "tail_id": res.tail_id, "metering_since": since,
+        "ids": list(res.ids),
     })
+
+
+def _counted_ids(session_id: str, now: float) -> set:
+    """The message ids counted by this session's events of the last ``DEDUP_HORIZON_S``."""
+    from macf.agent_events_log import read_events
+    out: set = set()
+    for ev in read_events(reverse=True, scope="all", only=EVENT, since=now - DEDUP_HORIZON_S):
+        d = ev.get("data") or {}
+        if d.get("session_id") == session_id:
+            out.update(d.get("ids") or ())
+    return out
 
 
 def meter_tick(session_id: str, transcript_path: str, now: Optional[float] = None) -> Optional[dict]:
@@ -446,6 +475,7 @@ def meter_tick(session_id: str, transcript_path: str, now: Optional[float] = Non
     events = calls = 0
     skipped: Optional[Dict[str, int]] = None
     skipped_now: Dict[str, int] = {}
+    counted: Optional[set] = None  # ids counted in this session lately, read at the first subagent scan
     main_point = resume.get(str(main))
     since = (main_point.metering_since if main_point else None) or time.time()
     for path in sorted(lookup.lost):
@@ -474,7 +504,11 @@ def meter_tick(session_id: str, transcript_path: str, now: Optional[float] = Non
                 events += 1
                 continue
             point = point or _Resume()
-            res = scan(path, point.offset, point.tail_id)
+            if counted is None and fixed_cause:  # main was scanned and recorded first: the copy is here
+                counted = _counted_ids(session_id, now)
+            res = scan(path, point.offset, point.tail_id, frozenset(counted or ()))
+            if counted is not None:
+                counted.update(res.ids)
         except OSError as e:
             print(f"⚠️ MACF: usage meter: cannot read {path}: {e}; skipped this tick", file=sys.stderr)
             continue
@@ -506,37 +540,74 @@ def weighted(row: Dict[str, int], cache_read_weight: Optional[float] = None) -> 
     return sum(w[k] * row.get(k, 0) for k in TOKEN_KINDS)
 
 
+def _stamp(value) -> Optional[float]:
+    """An ISO time as epoch seconds, or None when absent or unreadable."""
+    from datetime import datetime
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError as e:
+        print(f"⚠️ MACF: usage meter: unreadable call time {value!r} ({e})", file=sys.stderr)
+        return None
+
+
+def event_span(ev: dict) -> tuple:
+    """``(first, last)``: the times of the first and last call an event counted. Without ``last_ts``
+    both are the event's own time; without ``first_ts`` the span is the single moment ``last``."""
+    d = ev.get("data") or {}
+    last = _stamp(d.get("last_ts"))
+    if last is None:
+        last = float(ev.get("timestamp", 0))
+    first = _stamp(d.get("first_ts"))
+    return (first if first is not None and first <= last else last), last
+
+
+def fraction_in(ev: dict, lo: float, hi: float = float("inf")) -> float:
+    """The share of an event's calls that fell in ``[lo, hi)``, its span taken as evenly filled."""
+    first, last = event_span(ev)
+    if last <= first:
+        return 1.0 if lo <= last < hi else 0.0
+    return max(0.0, min(last, hi) - max(first, lo)) / (last - first)
+
+
 @dataclass
 class Summary:
-    tokens: Dict[str, int] = field(default_factory=lambda: {k: 0 for k in TOKEN_KINDS})
-    by_model: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    tokens: Dict[str, float] = field(default_factory=lambda: {k: 0 for k in TOKEN_KINDS})
+    by_model: Dict[str, Dict[str, float]] = field(default_factory=dict)
     by_cause: Dict[str, float] = field(default_factory=dict)
     low_by_cause: Dict[str, float] = field(default_factory=dict)
-    calls: int = 0
+    calls: float = 0
 
 
-def summarize(since: float) -> Summary:
-    """Sum the ``usage_metered`` events at or after the epoch time ``since``."""
+def summarize(since: float, cache_read_weight: Optional[float] = None) -> Summary:
+    """Sum the ``usage_metered`` events' calls from the epoch time ``since`` on, an event that began
+    before it prorated (``fraction_in``). ``by_cause`` is weighted with ``cache_read_weight`` (the
+    fit's, when given; else the price list's). An event is never older than its last call, so the
+    read stops at ``since``."""
     from macf.agent_events_log import read_events
     s = Summary()
     for ev in read_events(reverse=True, scope="all", only=EVENT, since=since):
+        f = fraction_in(ev, since)
+        if f <= 0:
+            continue
         d = ev.get("data") or {}
         cause = d.get("cause") or "operator"
         for model, row in (d.get("by_model") or {}).items():
             m = s.by_model.setdefault(model, _blank())
             for k in (*TOKEN_KINDS, "calls"):
-                m[k] += row.get(k, 0)
+                m[k] += f * row.get(k, 0)
                 if k in s.tokens:
-                    s.tokens[k] += row.get(k, 0)
-            s.calls += row.get("calls", 0)
-            s.by_cause[cause] = s.by_cause.get(cause, 0.0) + weighted(row)
-            s.low_by_cause[cause] = s.low_by_cause.get(cause, 0.0) + weighted(row, 0.0)
+                    s.tokens[k] += f * row.get(k, 0)
+            s.calls += f * row.get("calls", 0)
+            s.by_cause[cause] = s.by_cause.get(cause, 0.0) + f * weighted(row, cache_read_weight)
+            s.low_by_cause[cause] = s.low_by_cause.get(cause, 0.0) + f * weighted(row, 0.0)
     return s
 
 
 def format_summary(s: Summary, label: str) -> str:
     """The view, kept to about 60 columns."""
-    def n(x): return f"{int(x):,}"
+    def n(x): return f"{round(x):,}"
     def short(x):
         x = float(x)
         return f"{x/1e6:.2f}M" if x >= 1e6 else f"{x/1e3:.1f}k" if x >= 1e3 else f"{x:.0f}"

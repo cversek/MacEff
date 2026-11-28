@@ -2,6 +2,7 @@
 
 import json
 import time
+from datetime import datetime, timezone
 
 from macf import usage_meter as um
 from macf import usage_share as us
@@ -11,7 +12,8 @@ from macf.agent_events_log import append_event, read_events
 def _line(mid, **usage):
     base = {"input_tokens": 1000, "cache_read_input_tokens": 0, "output_tokens": 0}
     base.update(usage)
-    return json.dumps({"type": "assistant", "timestamp": "2026-11-22T10:00:00Z",
+    now = datetime.now(timezone.utc).isoformat()  # calls happen now: the hour's readers place them by their time
+    return json.dumps({"type": "assistant", "timestamp": now,
                        "message": {"id": mid, "model": "m-a", "usage": base}}) + "\n"
 
 
@@ -105,11 +107,11 @@ def test_hook_suffix_reads_one_rolled_event(monkeypatch):
             yield ev
 
     monkeypatch.setattr(us, "read_events", counting)
-    assert us.hook_suffix(now=now + 5) == "· me ~0.50%/h"
+    assert us.hook_suffix(now=now + 5) == "· me ~0.50%/1h"
     assert seen == [us.ROLLED_EVENT]
     append_event(us.ROLLED_EVENT, {"points_1h": 0.25, "calls_1h": 9, "rate": 1e-8, "fitted": True, "at": now})
     seen.clear()
-    assert us.hook_suffix(now=now + 5) == "· me 0.25%/h"
+    assert us.hook_suffix(now=now + 5) == "· me 0.25%/1h"
     assert len(seen) == 1
 
 

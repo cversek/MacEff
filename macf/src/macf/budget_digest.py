@@ -41,6 +41,7 @@ class Rate:
     low: float
     high: float
     fitted: bool
+    read_weight: Optional[float] = None  # the fit's cache-read weight; None is the price list's
 
 
 def hour_rate(now: float) -> Rate:
@@ -49,7 +50,7 @@ def hour_rate(now: float) -> Rate:
     for ev in read_events(reverse=True, scope="all", only=FIT_EVENT, since=now - HOUR):
         fit = _fit_from(ev)  # the one reader of the event: an attempt that found no fit reads as None, quietly
         if fit is not None:
-            return Rate(value=fit.rate, low=fit.low, high=fit.high, fitted=True)
+            return Rate(value=fit.rate, low=fit.low, high=fit.high, fitted=True, read_weight=fit.read_weight)
         break
     p = usage_meter.POINTS_PER_WEIGHTED_TOKEN
     return Rate(value=p, low=p, high=p, fitted=False)
@@ -76,7 +77,12 @@ class Spend:
     latest_call: Dict[str, float]  # mean tokens per call of the newest event
 
 
-def _spend(now: float) -> Optional[Spend]:
+def _spend(now: float, read_weight: Optional[float] = None) -> Optional[Spend]:
+    """The last hour's spend, each event prorated over its calls' span, cache reads weighed at
+    ``read_weight`` (the fit's) when given."""
+    weights = dict(usage_meter.WEIGHTS)
+    if read_weight is not None:
+        weights["cache_read_input_tokens"] = read_weight
     kinds = {k: 0.0 for k in usage_meter.TOKEN_KINDS}
     by_cause: Dict[str, float] = {}
     calls = cache_read = 0
@@ -87,28 +93,34 @@ def _spend(now: float) -> Optional[Spend]:
         n = sum(r.get("calls", 0) for r in rows)
         if not n:
             continue  # a baseline event meters nothing
+        f = usage_meter.fraction_in(ev, now - HOUR, now)
+        if f <= 0:
+            continue
         cause = d.get("cause") or "operator"
         for r in rows:
             for k in usage_meter.TOKEN_KINDS:
-                kinds[k] += usage_meter.WEIGHTS[k] * r.get(k, 0)
-            by_cause[cause] = by_cause.get(cause, 0.0) + usage_meter.weighted(r)
-            cache_read += r.get("cache_read_input_tokens", 0)
-        calls += n
+                kinds[k] += f * weights[k] * r.get(k, 0)
+            by_cause[cause] = by_cause.get(cause, 0.0) + f * usage_meter.weighted(r, read_weight)
+            cache_read += f * r.get("cache_read_input_tokens", 0)
+        calls += f * n
         if latest is None:
             latest = {k: sum(r.get(k, 0) for r in rows) / n for k in usage_meter.TOKEN_KINDS}
     if not calls or sum(kinds.values()) <= 0 or latest is None:
         return None
-    return Spend(kinds=kinds, by_cause=by_cause, calls=calls, cache_read=cache_read, latest_call=latest)
+    return Spend(kinds=kinds, by_cause=by_cause, calls=max(1, round(calls)), cache_read=round(cache_read),
+                 latest_call=latest)
 
 
 def _share_line(wt: float, rate: Rate, now: float) -> str:
     from macf import usage_share
-    mine = wt * rate.value
-    prov = usage_share.RateFit(rate=rate.value, low=rate.low, high=rate.high, hours=0, r2=0.0)
+    prov = usage_share.RateFit(rate=rate.value, low=rate.low, high=rate.high, hours=0, r2=0.0,
+                               read_weight=usage_share.PRICE_READ_WEIGHT if rate.read_weight is None
+                               else rate.read_weight)
     s = usage_share.share(1.0, now=now, fit=prov)
     if s.account is None:
         return "share: account movement unknown"
-    out = f"share: {_points(mine)} of {s.account:g} account"
+    mine, capped = usage_share.cap_points(wt * rate.value, s.account)
+    out = f"share: {usage_share.CAP_MARK if capped else ''}{_points(mine)} of {s.account:g} account"
     if rate.fitted:
         out += f" ({_points(wt * rate.low)} to {_points(wt * rate.high)})"
     else:
@@ -123,10 +135,10 @@ def digest(now: Optional[float] = None) -> Optional[str]:
         if ev.get("timestamp", 0) > now - HOUR:
             return None
         break
-    sp = _spend(now)
+    rate = hour_rate(now)
+    sp = _spend(now, rate.read_weight)
     if sp is None:
         return None
-    rate = hour_rate(now)
     wt = sum(sp.kinds.values())
     pts = wt * rate.value
     top = sorted(sp.by_cause.items(), key=lambda kv: -kv[1])[:3]
@@ -141,7 +153,7 @@ def digest(now: Optional[float] = None) -> Optional[str]:
         lines.append(f"  driver: {NAMES[big]}, {pct:.0f}% of points")
     lines.append("  " + _share_line(wt, rate, now))
     ctx = sum(v for k, v in sp.latest_call.items() if k != "output_tokens")
-    nxt = usage_meter.weighted(sp.latest_call) * rate.value
+    nxt = usage_meter.weighted(sp.latest_call, rate.read_weight) * rate.value
     lines.append(f"  one more turn at {_short(ctx)} context: ~{_points(nxt)}")
     append_event(DIGEST_EVENT, {"points": pts, "calls": sp.calls, "window_h": 1})
     return "\n".join(lines)
@@ -167,8 +179,9 @@ def _snapshot(now: float) -> dict:
         except ValueError as e:
             print(f"⚠️ MACF: sprint budget: unreadable reset {reset!r} ({e}); counting the last 7 days",
                   file=sys.stderr)
-    s = usage_meter.summarize(since)
-    points = sum(s.by_cause.values()) * hour_rate(now).value
+    rate = hour_rate(now)
+    s = usage_meter.summarize(since, rate.read_weight)
+    points = sum(s.by_cause.values()) * rate.value
     return {"percent": pct, "resets_at": reset, "agent_points": points}
 
 

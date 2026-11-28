@@ -109,7 +109,7 @@ def test_hook_suffix_shows_with_recent_events_and_ignores_old_ones():
     assert usage_share.hook_suffix(now) is None
     _write([_metered(now - 600, 5e6)])
     want = usage_share.hook_suffix(now)
-    assert want == f"· me ~{usage_share_fmt(5e6 * usage_meter.POINTS_PER_WEIGHTED_TOKEN)}%/h"
+    assert want == f"· me ~{usage_share_fmt(5e6 * usage_meter.POINTS_PER_WEIGHTED_TOKEN)}%/1h"
 
 
 def usage_share_fmt(x):
@@ -121,7 +121,7 @@ def test_hook_suffix_uses_a_fit_from_the_last_hour():
     now = time.time()
     _write([_metered(now - 600, 5e6)])
     usage_share.record_fit(usage_share.RateFit(rate=1e-7, low=9e-8, high=1.1e-7, hours=20, r2=0.9), 48)
-    assert usage_share.hook_suffix(now) == f"· me {usage_share_fmt(0.5)}%/h"
+    assert usage_share.hook_suffix(now) == f"· me {usage_share_fmt(0.5)}%/1h"
 
 
 def test_budget_me_prints_the_share_lines(capsys):
@@ -290,7 +290,7 @@ def test_reads_cross_a_cycle_boundary():
     assert usage_share.share(30, now=now, fit=usage_share.RateFit(rate=1e-8, low=1e-8, high=1e-8, hours=9, r2=1)).weighted_tokens > 4e6 * 2
     z = now + 10 * HOUR
     _write([_metered(z + 1, 1e6), _boundary(z + 2), _metered(z + 3, 1e6)])
-    assert usage_share.hook_suffix(z + 4) == f"· me ~{usage_share_fmt(2e6 * usage_meter.POINTS_PER_WEIGHTED_TOKEN)}%/h"
+    assert usage_share.hook_suffix(z + 4) == f"· me ~{usage_share_fmt(2e6 * usage_meter.POINTS_PER_WEIGHTED_TOKEN)}%/1h"
 
 
 def test_now_is_honoured_by_the_fit_share_and_hook_suffix():
@@ -311,8 +311,8 @@ def test_now_is_honoured_by_the_fit_share_and_hook_suffix():
     ({}, 77.0),
 ])
 def test_event_time_prefers_last_ts_and_falls_back_loudly(data, expect, capsys):
-    assert usage_share._event_time({"timestamp": 77, "data": data}) == expect
-    assert ("unreadable last_ts" in capsys.readouterr().err) == (data.get("last_ts") == "not a time")
+    assert usage_meter.event_span({"timestamp": 77, "data": data}) == (expect, expect)
+    assert ("unreadable call time" in capsys.readouterr().err) == (data.get("last_ts") == "not a time")
 
 
 def test_an_events_models_add():
@@ -327,9 +327,9 @@ def test_hook_suffix_adds_events_reads_newest_fit_and_survives_an_unreadable_one
     fit = lambda t, r: {"timestamp": t, "event": usage_share.FIT_EVENT,
                         "data": {"rate": r, "low": r, "high": r, "hours": 9, "r2": 0.5}}
     _write([_metered(now - 1000, 2e6), _metered(now - 500, 3e6), fit(now - 900, 1e-7), fit(now - 800, 2e-7)])
-    assert usage_share.hook_suffix(now) == f"· me {usage_share_fmt(5e6 * 2e-7)}%/h"  # newest fit, events summed
+    assert usage_share.hook_suffix(now) == f"· me {usage_share_fmt(5e6 * 2e-7)}%/1h"  # newest fit, events summed
     _write([{"timestamp": now - 100, "event": usage_share.FIT_EVENT, "data": {"rate": 1e-7}}])
-    assert usage_share.hook_suffix(now) == f"· me ~{usage_share_fmt(5e6 * usage_meter.POINTS_PER_WEIGHTED_TOKEN)}%/h"
+    assert usage_share.hook_suffix(now) == f"· me ~{usage_share_fmt(5e6 * usage_meter.POINTS_PER_WEIGHTED_TOKEN)}%/1h"
     assert "unreadable cached fit" in capsys.readouterr().err
     _write([{"timestamp": now - 50, "event": usage_share.FIT_EVENT, "data": {"rate": None, "reason": "x"}}])
     assert usage_share.hook_suffix(now).startswith("· me ~")  # a recorded no-fit means provisional
@@ -355,7 +355,8 @@ def test_the_weekly_line_joins_the_suffix_and_survives_one_that_raises(monkeypat
 def test_the_views_print_exactly_this():
     fit = usage_share.RateFit(rate=4.5e-8, low=3.9e-8, high=5.2e-8, hours=21, r2=0.87)
     assert usage_share.format_fit(usage_share.FitAttempt(fit=fit), 48) == (
-        "rate, last 48h\n  4.5e-08 points/weighted token\n  90% 3.9e-08 to 5.2e-08\n  21 hours, r2 0.87")
+        "rate, last 48h\n  4.5e-08 points/weighted token\n  90% 3.9e-08 to 5.2e-08\n  21 hours, r2 0.87\n"
+        "  cache read weight 0.1 (fitted)")
     assert usage_share.format_fit(usage_share.FitAttempt(fit=None, reason="why"), 48) == (
         "no fit: why\nprovisional rate 4.08e-08 points/token")
     s = usage_share.Share(window_h=24, weighted_tokens=1e8, rate=4.5e-8, low_rate=3.9e-8, high_rate=5.2e-8,
@@ -515,3 +516,76 @@ def test_earliest_metering_since_decides_partial():
     b["data"]["metering_since"] = now - 600
     _write([a, b])
     assert not usage_share.hook_suffix(now).endswith(usage_share.PARTIAL_MARK)
+
+
+# ── #1176: the fitted read weight, the cap, the window, proration ─────────────
+
+def _metered_rows(t, rest=0.0, reads=0.0, first=None):
+    data = {"by_model": {"m": {"input_tokens": rest, "cache_read_input_tokens": reads, "calls": 1}},
+            "calls": 5, "cause": "operator"}
+    if first is not None:  # the event's calls span [first, t]
+        data["first_ts"] = datetime.fromtimestamp(first, timezone.utc).isoformat()
+        data["last_ts"] = datetime.fromtimestamp(t, timezone.utc).isoformat()
+    return {"timestamp": t, "event": usage_meter.EVENT, "data": data}
+
+
+def test_the_fit_finds_the_read_weight_the_counter_shows_and_carries_it():
+    """Reads truly cost 0.01 of an input token: the fit must pick 0.01, not the price list's 0.1."""
+    end, rows, pct = _hour_end() - 86400, [], 10.0
+    for k in range(24):
+        start = end - (24 - k) * HOUR
+        rest, reads = 1e6 + 4e5 * ((k * 37) % 11), 2e7 + 1.5e7 * ((k * 53) % 13)
+        rows += [_sample(start, pct), _metered_rows(start + 1800, rest, reads)]
+        pct += TRUE_RATE * (rest + 0.01 * reads) + _noise(k) / 10
+    rows.append(_sample(end, pct))
+    _write(rows)
+    fit = usage_share.try_fit(now=end + 10).fit
+    assert fit is not None and fit.read_weight == 0.01
+    assert abs(fit.rate - TRUE_RATE) / TRUE_RATE < 0.1
+    usage_share.record_fit(fit, 48)
+    [ev] = list(read_events(reverse=False, scope="all", only=usage_share.FIT_EVENT))
+    assert ev["data"]["read_weight"] == 0.01 and usage_share._fit_from(ev).read_weight == 0.01
+
+
+def test_points_use_the_fits_read_weight_in_share_and_on_the_hook_line():
+    now = time.time()
+    _write([_metered_rows(now - 600, rest=1e6, reads=1e8)])
+    fit = usage_share.RateFit(rate=1e-7, low=1e-7, high=2e-7, hours=20, r2=0.9, read_weight=0.005)
+    s = usage_share.share(1, now=now, fit=fit)
+    assert math.isclose(s.weighted_tokens, 1e6 + 0.005 * 1e8) and s.read_weight == 0.005
+    usage_share.record_fit(fit, 48)
+    assert usage_share.hook_suffix(now) == f"· me {usage_share_fmt(1e-7 * (1e6 + 0.005 * 1e8))}%/1h"
+
+
+def test_a_share_above_the_account_is_capped_at_its_movement_plus_one_and_says_so():
+    now = _hour_end() - 2 * 86400 + 900
+    _write([_sample(now - 2 * HOUR, 30.0), _sample(now - 0.5 * HOUR, 32.0), _metered_rows(now - 600, rest=4e7)])
+    fit = usage_share.RateFit(rate=1e-7, low=5e-8, high=2e-7, hours=10, r2=0.5)
+    s = usage_share.share(1, now=now, fit=fit)  # uncapped: 4.0 points against an account move of 2
+    assert s.account == 2.0 and s.capped and s.points == 3.0 and s.remainder == -1.0
+    assert s.points_high == 3.0 and s.points_low == 2.0 and s.remainder_high == 0.0
+    out = usage_share.format_share(s)
+    assert "me    ≤   3.00" in out and "capped at account + 1" in out and "my share" not in out
+    assert max(len(l) for l in out.splitlines()) <= 60
+    small = usage_share.share(1, now=now, fit=usage_share.RateFit(rate=5e-8, low=5e-8, high=6e-8, hours=10, r2=0.5))
+    assert not small.capped and small.points == 2.0 and "capped" not in usage_share.format_share(small)
+
+
+def test_the_hook_line_caps_at_the_hours_account_movement_and_names_its_window():
+    now = time.time()
+    _write([_metered_rows(now - 600, rest=1e8)])  # 4 provisional points, account unknown: not capped
+    assert usage_share.hook_suffix(now) == f"· me ~{usage_share_fmt(1e8 * usage_meter.POINTS_PER_WEIGHTED_TOKEN)}%/1h"
+    _write([_sample(now - 3000, 40.0), _sample(now - 60, 40.0)])  # the account sat still for the hour
+    assert usage_share.hook_suffix(now) == f"· me ≤~{usage_share_fmt(1.0)}%/1h"
+    assert usage_share.roll(now) is True  # the cap survives the rolled event the hook line reads
+    assert usage_share.hook_suffix(now + 5) == f"· me ≤~{usage_share_fmt(1.0)}%/1h"
+
+
+def test_an_event_spanning_the_window_edge_counts_only_its_share_inside():
+    now = _hour_end() - 3 * 86400 + 900
+    # calls evenly from 90 to 30 minutes ago: half of them fell in the last hour
+    _write([_metered_rows(now - 1800, rest=4e6, first=now - 5400)])
+    fit = usage_share.RateFit(rate=1e-7, low=1e-7, high=2e-7, hours=10, r2=0.5)
+    assert math.isclose(usage_share.share(1, now=now, fit=fit).weighted_tokens, 2e6)
+    assert math.isclose(usage_meter.summarize(now - HOUR).calls, 0.5)
+    assert math.isclose(usage_share.share(2, now=now, fit=fit).weighted_tokens, 4e6)
