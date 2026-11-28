@@ -334,6 +334,38 @@ class EgressPolicy(BaseModel):
         return v
 
 
+class MailEgress(BaseModel):
+    """Who may open the mail ports in this deployment: an allow-list (MIS-0004 R33).
+
+    Every account not listed is refused on the mail ports, matched on the socket's owner, so an
+    account added later is covered without anyone remembering it. A per-agent ``deny_tcp_ports``
+    list fails open for any account it doesn't name; this doesn't. List the broker's account and
+    every account that really opens a mail port: a tunnel or an inbound fetcher, and the human
+    accounts the operator declares. Absent, the per-agent deny-lists stay as they are and start
+    warns that R33 isn't met.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    allow_accounts: List[str] = Field(
+        ...,
+        description=("Accounts that may open the mail ports (25, 465, 587, 993). The broker's "
+                     "account must be among them."),
+    )
+
+    @field_validator('allow_accounts', mode='before')
+    @classmethod
+    def validate_accounts(cls, v: Any) -> Any:
+        if not isinstance(v, list) or not v:
+            raise ValueError("mail_egress.allow_accounts must be a non-empty list of account names")
+        for name in v:
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,31}", name):
+                raise ValueError(f"mail_egress.allow_accounts entry {name!r} is not an account name")
+        if len(set(v)) != len(v):
+            raise ValueError(f"mail_egress.allow_accounts contains duplicates: {v}")
+        return v
+
+
 #: MacEff's own periodic mail checks: each runs as a schedule, where its runs, owed and done,
 #: are recorded, never as a unit that loops on its own (MIS-0002-R54). The daemon runs as a
 #: module (`-m`), or as its script, which carries its own interpreter line.
@@ -1117,6 +1149,12 @@ class AgentsConfig(BaseModel):
     services: Dict[str, ServiceSpec] = Field(
         default_factory=dict,
         description="Non-agent service accounts and the secrets they hold"
+    )
+
+    mail_egress: Optional[MailEgress] = Field(
+        default=None,
+        description=("The mail-port allow-list (MIS-0004 R33): only these accounts open the mail "
+                     "ports. Absent, only per-agent deny-lists apply, and start warns."),
     )
 
     homes_volume: Optional[str] = Field(

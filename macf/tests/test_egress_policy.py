@@ -466,3 +466,120 @@ class TestRefusalsNamePolicy:
         assert len([h for h in ("enforcement placement", "identity separation",
                                 "declared-but-unenforceable", "verification by attempt")
                     if h in msg]) >= 3
+
+
+# ---------------------------------------------------------------------------
+# MIS-0004 R33: the mail-port allow-list
+# ---------------------------------------------------------------------------
+
+UIDS = {"a1": 21100, "amail_broker": 21998, "admin": 21000}
+
+
+def _mail_config(allow, defaults=None):
+    payload = {
+        "ids": {"base": 21000},
+        "agents": {"a1": {"username": "a1", "uid": 21100, "personality": "agents/x.md"}},
+        "subagents": {},
+        "mail_egress": {"allow_accounts": allow},
+    }
+    if defaults is not None:
+        payload["defaults"] = defaults
+    return AgentsConfig(**payload)
+
+
+def _fake_system(start_module, monkeypatch, listed_extra="", drop=None, accounts=UIDS):
+    """iptables that records each call and lists back what was appended, minus *drop*."""
+    monkeypatch.setattr(start_module.shutil, "which", lambda name: f"/sbin/{name}")
+    monkeypatch.setattr(start_module.pwd, "getpwnam",
+                        lambda name: SimpleNamespace(pw_uid=accounts[name]) if name in accounts
+                        else (_ for _ in ()).throw(KeyError(name)))
+    monkeypatch.setattr(start_module, "user_exists", lambda name: name in accounts)
+    calls, chain = [], {}
+
+    def _run(cmd, *a, **k):
+        calls.append(cmd)
+        if len(cmd) > 2 and cmd[1] == "-A":
+            line = "-A " + " ".join(cmd[2:])
+            catch_all = "-j REJECT" in line and "--uid-owner" not in line
+            if not (drop and (drop in line or (drop == "catch-all" and catch_all))):
+                chain.setdefault(cmd[0], []).append(line)
+        if len(cmd) > 1 and cmd[1] == "-S":
+            return SimpleNamespace(returncode=0, stdout="\n".join(chain.get(cmd[0], [])) + listed_extra,
+                                   stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(start_module.subprocess, "run", _run)
+    return calls
+
+
+class TestMailAllowList:
+    def test_installs_accepts_then_a_catch_all_reject_on_both_families(self, start_module, monkeypatch):
+        """R33: only the declared accounts open the mail ports. Each family gets an ACCEPT per
+        allowed uid, then one REJECT that matches every other owner, so an account nobody listed
+        is refused too, which a deny-list can't do."""
+        calls = _fake_system(start_module, monkeypatch)
+        start_module.apply_egress_policy(_mail_config(["amail_broker", "admin"]))
+        for binary in ("iptables", "ip6tables"):
+            appends = [c[3:] for c in calls if c[:3] == [binary, "-A", "MACEFF_EGRESS"]]
+            assert [a[a.index("--uid-owner") + 1] for a in appends[:-1]] == ["21000", "21998"]
+            assert all(a[-2:] == ["-j", "ACCEPT"] for a in appends[:-1])
+            assert "--uid-owner" not in appends[-1] and "REJECT" in appends[-1]
+
+    def test_an_allow_list_without_the_broker_account_is_refused(self, start_module, monkeypatch):
+        calls = _fake_system(start_module, monkeypatch)
+        with pytest.raises(RuntimeError, match="leaves out 'amail_broker'"):
+            start_module.apply_egress_policy(_mail_config(["admin"]))
+        assert not [c for c in calls if len(c) > 1 and c[1] == "-A"], "nothing installed before the refusal"
+
+    def test_an_allowed_account_that_does_not_exist_is_refused(self, start_module, monkeypatch):
+        _fake_system(start_module, monkeypatch)
+        with pytest.raises(RuntimeError, match="'ghost', which is not an account"):
+            start_module.apply_egress_policy(_mail_config(["amail_broker", "ghost"]))
+
+    def test_an_account_both_allowed_and_denied_a_mail_port_is_refused(self, start_module, monkeypatch):
+        _fake_system(start_module, monkeypatch)
+        config = _mail_config(["amail_broker", "a1"], defaults={"egress": {"deny_tcp_ports": [587]}})
+        with pytest.raises(RuntimeError, match=r"\['a1'\] are both allowed"):
+            start_module.apply_egress_policy(config)
+
+    def test_a_catch_all_missing_after_install_aborts(self, start_module, monkeypatch):
+        """Read back, never assumed: a chain that lost its REJECT would admit every account."""
+        _fake_system(start_module, monkeypatch, drop="catch-all")
+        with pytest.raises(RuntimeError, match="catch-all REJECT absent"):
+            start_module.apply_egress_policy(_mail_config(["amail_broker"]))
+
+    def test_every_rule_loads_in_both_address_families(self):
+        """One rendered rule goes to iptables and to ip6tables, so it may name nothing that only
+        one family accepts: ip6tables refuses IPv4's icmp-port-unreachable, and a container would
+        stop at its start step. A plain REJECT defaults to each family's own refusal."""
+        from macf.amail.egress import render_iptables_rules
+        for rule in render_iptables_rules({"amail_broker": 22998, "operator": 22000}):
+            assert not any(arg.startswith(("icmp-", "icmp6-")) or arg == "--reject-with" for arg in rule), rule
+
+    def test_a_missing_accept_after_install_aborts_even_with_the_catch_all(self, start_module, monkeypatch):
+        """Read back per account: a chain that kept its REJECT but lost the broker's ACCEPT would
+        refuse the broker's mail while the log said the list was active."""
+        _fake_system(start_module, monkeypatch, drop=f"--uid-owner {UIDS['amail_broker']} -j ACCEPT")
+        with pytest.raises(RuntimeError, match=r"missing ACCEPT for \['amail_broker'\]"):
+            start_module.apply_egress_policy(_mail_config(["amail_broker", "admin"]))
+
+    @pytest.mark.parametrize("allow, why", [
+        ([], "non-empty list"),
+        ("amail_broker", "non-empty list"),
+        (["amail_broker", "amail_broker"], "duplicates"),
+        (["amail broker"], "not an account name"),
+        (["amail_broker", 7], "not an account name"),
+    ])
+    def test_the_declared_list_is_checked_when_the_config_loads(self, allow, why):
+        """The list is refused at load, before any rule is rendered: empty, not a list, a name
+        twice, or something that isn't an account name."""
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match=why):
+            _mail_config(allow)
+
+    def test_without_an_allow_list_start_warns_that_r33_is_unmet(self, start_module, monkeypatch):
+        _fake_system(start_module, monkeypatch, listed_extra="")
+        logged = []
+        monkeypatch.setattr(start_module, "log", lambda m: logged.append(m))
+        start_module.apply_egress_policy(_config({"a1": {}}, defaults={"egress": {"deny_tcp_ports": [587]}}))
+        assert any("no mail_egress.allow_accounts declared" in m and "R33" in m for m in logged)
