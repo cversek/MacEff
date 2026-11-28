@@ -50,8 +50,11 @@ def _roundtrip(req: Dict[str, Any], socket_path: Path, timeout: float,
             f"cannot reach the amail broker at {path}: {e}. "
             "Mail is not sent. There is no fallback transport by design."
         ) from e
+    from .socket_protocol import VERSION
     try:
-        payload = json.dumps(req) + "\n"
+        # Every request names the protocol it speaks (MIS-0004 R35), so a broker on another build
+        # refuses it with the versions it does speak instead of misreading it.
+        payload = json.dumps({"v": VERSION, **req}) + "\n"
         try:
             s.sendall(payload.encode("utf-8"))
             buf = b""
@@ -833,3 +836,15 @@ def contacts(socket_path: Path, timeout: float = 10.0,
     if sender:
         req["sender"] = sender
     return _roundtrip(req, socket_path, timeout, "No contact list was returned.")
+
+
+def message_state(message_id: str, socket_path: Path, timeout: float = 10.0,
+                  sender: Optional[str] = None) -> Dict[str, Any]:
+    """The broker's answer for one message this agent sent: each recipient's latest receipt state
+    and the message-level view (MIS-0004 R24). `found` is false for an id the broker holds no
+    record of for this agent, which includes another agent's message. The same record stays
+    readable without a broker through `sent_disposition`."""
+    req: Dict[str, Any] = {"op": "state", "message_id": message_id}
+    if sender:
+        req["sender"] = sender
+    return _roundtrip(req, socket_path, timeout, "No state was returned.")

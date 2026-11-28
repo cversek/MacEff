@@ -3,6 +3,7 @@
 **Type**: Infrastructure (opt-in)
 **Scope**: All agents (PA and SA), and the broker that serves them
 **Status**: ACTIVE — specification. No implementation is authorized by this document.
+**Version**: 1.17.0 — §6b.2: a sender can also ask the broker for a message's latest state by its id, `amail state <id>`, answered from the same disposition record and scoped to the caller (MIS-0004 R24). §3.2: every request on the broker socket carries a protocol version `v`, every reply names the version that answered, and a superseded version is served through a declared last day, then refused by name (R35). Minor: a new verb, and a new refusal a client on another build can meet.
 **Version**: 1.16.0 — §3.2.3: every agent message is judged against the operator's registry (MIS-0004 R44), by the broker and the recipient with one rule, card and time: the broker resolves the sender's card and writes it with its acceptance time into the hand-off sidecar. A declared sender's unsigned or failed signature is suspect; any other sender is unverified; contact books no longer verify. Minor for operators: a declared agent's verdicts change, and a receiver's amail settings may name `domain`.
 **Version**: 1.15.0 — §3.2.3: the operator's registry. Each MacEff agent's public key is declared with its account in a root-owned file only the operator can write, which also records each certificate his authority issues by name, serial and expiry; anything else can write it and it is refused when read (MIS-0004 R42). `amail registry check` reports it.
 **Version**: 1.14.0 — §3.4: the broker's health is its last sweep (MIS-0004 R31). A deployment names the schedule that runs the inbound `sweep` in its declaration's `mail_sweep_schedule`; the broker is healthy only when that sweep's last run ended ok, and the outside watch alerts as `mail-broker: SWEEP-FAILED` when it failed, is overdue, or never ran, so stuck mail reaches a person (R32). Minor: a new declaration field and a new alert an operator can meet.
@@ -123,6 +124,8 @@ becomes tractable once the address stops encoding how the message travels.
 - Can I see the rate limit before I hit it, and where?
 - Why is a multi-recipient message refused whole rather than sent to the permitted part?
 - How does the broker know who I am, and why can I not simply claim a sender?
+- My client is on a different build from the broker. What happens to my requests, and how
+  is the socket's protocol changed without stranding older clients?
 - Why is there a rate limit, and whose asset is it protecting?
 - Who writes the sender's copy of a message, and why is it never the broker?
 - Why does my sent copy carry a different id from the one `send` reported, and which
@@ -131,6 +134,8 @@ becomes tractable once the address stops encoding how the message travels.
   fact live?
 - Why is a disposition recorded as a history rather than a last value, and what must an
   UNRECORDED disposition read as?
+- How do I ask the broker where one message I sent stopped, and what does it answer for
+  someone else's message?
 - Why is a store with a reader and no writer a defect rather than a stub?
 - What input must a pre-send gate accept, and what does passing it actually mean?
 - Is the pre-send gate scoped by who composed a message or by where it is going, and what
@@ -684,6 +689,16 @@ Refusals are returned to the agent as errors. An agent MUST be able to tell that
 message was refused, and why — silent discard trains agents to believe mail was
 delivered.
 
+**The socket carries a protocol version** (MIS-0004 R35). One broker serves seats on
+different builds of macf, so every request names the version it speaks in `v`, and
+every reply, refusals included, names the version that answered. A request with no `v`
+is version 1, which is what every client before the field spoke. A version the broker
+doesn't speak is refused with the versions it does, and nothing in the request is run.
+When the protocol changes, the old version is listed in `macf.amail.socket_protocol`
+with the last day it is still accepted, in the same pull request as the change. Until
+then it is served with a `deprecated` note naming that day, and after it, refused by
+name. An addition an old client never sends, such as a new operation, isn't a change.
+
 ### 3.2.1 Two rules about the credential that were learned by measuring
 
 **Authorization completes before the credential is touched.** The broker MUST finish
@@ -1148,6 +1163,14 @@ Record it as a **history, not a last value** — a bounce after three deferrals 
 different fact from an immediate bounce, and only a sequence tells them apart. And an
 **unrecorded disposition MUST read as absent, never as delivered**: a caller that treats
 absence as success invents exactly the silent delivery this section exists to prevent.
+
+**The broker also answers by id** (MIS-0004 R24). `macf_tools amail state <id>` asks
+the broker where one message stopped, and the answer comes from the same record: each
+recipient's latest state with its detail and time, and the message-level view derived
+from them. It answers only for the caller's own messages. Another agent's id gets the
+same reply as an unknown one, `found: false`, so the answer reveals nothing about which
+ids another agent holds. The record stays readable from the filesystem when no broker
+runs. The socket is a second way in, not a replacement.
 
 A corollary worth stating because it was found the expensive way: **a store with a
 reader and no writer is a defect, not a stub.** If the read path exists and nothing
