@@ -55,7 +55,9 @@ LABEL_SOURCES = ("xref", "citations", "same_subject")
 EVENT_SEALED = "knowledge_eval_sealed"
 EVENT_HELD_RUN = "knowledge_eval_held_run"
 
-_LEARNING_FILE = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}_[A-Za-z0-9_\-]+?_learning\.md)")
+#: A dated artifact file, as the learnings CLI names one (``<date>_<time>_<slug>.md``), with or without a
+#: ``_learning`` suffix. Its callers keep only names that resolve to a learning node (#1165).
+_LEARNING_FILE = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}_[A-Za-z0-9_\-]+?\.md)")
 _CITE = re.compile(r'\[(OBSERVATION|LEARNING|REFLECTION|JOTEWR|CCP|CHECKPOINT|EXPERIMENT|REPORT|ROADMAP|MISSION|IDEA)\s+'
                    r'(\d{4}-\d{2}-\d{2})[^"\]]*"([^"]+)"', re.I)
 _KIND_TYPES = {"observation": {"observations"}, "learning": {"learnings"}, "reflection": {"reflections"},
@@ -204,7 +206,10 @@ def _cross_references(text: str) -> str:
 
 
 def xref_labels(corpus: Corpus) -> Tuple[Dict[str, Set[str]], int]:
+    """Each learning's Cross-References to other learnings. A name that resolves to no node at all is
+    unresolved; one naming a dated artifact of another type is a link, just not a learning's."""
     by_file = {Path(v["path"]).name: k for k, v in corpus.nodes.items() if v["type"] == "learnings"}
+    any_file = {Path(v["path"]).name for v in corpus.nodes.values()}
     rel: Dict[str, Set[str]] = defaultdict(set)
     unresolved = 0
     for k, v in corpus.nodes.items():
@@ -214,7 +219,7 @@ def xref_labels(corpus: Corpus) -> Tuple[Dict[str, Set[str]], int]:
             t = by_file.get(fn)
             if t and t != k:
                 rel[k].add(t)
-            elif not t:
+            elif not t and fn not in any_file:
                 unresolved += 1
     return dict(rel), unresolved
 

@@ -77,6 +77,34 @@ def test_labels_come_from_cross_references_citations_and_index_clusters(corpus):
     assert len(same) == N // 4 and all(len(v) == N // 4 - 1 for v in same.values())
 
 
+def test_learnings_named_without_the_suffix_still_get_labels():
+    """The learnings CLI names a learning <date>_<time>_<slug>.md, with no _learning suffix. Matching only
+    the suffix left such a corpus with no cross-reference or same-subject labels at all (#1165). A link to a
+    dated artifact of another type is neither a label nor unresolved."""
+    snap = _snapshot()
+    renamed = {}
+    for k, v in snap["nodes"].items():
+        if v["type"] == "learnings":
+            v = dict(v, path=v["path"].replace("_learning.md", ".md"),
+                     text=v["text"].replace("_learning.md", ".md"))
+            k = k.replace("_learning", "")
+        renamed[k] = v
+    renamed["observations:2026-01-03_120000_seen"] = {
+        "type": "observations", "class": "temporal_record", "title": "seen",
+        "path": "/home/a/agent/public/observations/2026-01-03_120000_seen.md", "concepts": [], "text": "x",
+        "in_web": True, "linked": True}
+    first = next(k for k in renamed if k.startswith("learnings:"))
+    renamed[first]["text"] += "- `2026-01-03_120000_seen.md`\n- `2026-01-04_120000_gone.md`\n"
+    snap["nodes"] = renamed
+    snap["learnings_index"] = snap["learnings_index"].replace("_learning.md", ".md")
+    corpus = ke.Corpus(snap, "e" * 64)
+    xref, unresolved = ke.xref_labels(corpus)
+    assert len(xref) == N
+    assert unresolved == 1, "only the name that matches no node is unresolved, not the observation"
+    same, _ = ke.same_subject_labels(corpus, snap["learnings_index"])
+    assert len(same) == N // 4
+
+
 def test_the_split_is_stable_and_a_query_keeps_its_side_as_the_corpus_grows():
     ids = [f"q{i}" for i in range(500)]
     dev, held = ke.split(ids, "s")
