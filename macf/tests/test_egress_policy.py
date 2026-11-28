@@ -556,6 +556,27 @@ class TestMailAllowList:
         for rule in render_iptables_rules({"amail_broker": 22998, "operator": 22000}):
             assert not any(arg.startswith(("icmp-", "icmp6-")) or arg == "--reject-with" for arg in rule), rule
 
+    def test_a_missing_accept_after_install_aborts_even_with_the_catch_all(self, start_module, monkeypatch):
+        """Read back per account: a chain that kept its REJECT but lost the broker's ACCEPT would
+        refuse the broker's mail while the log said the list was active."""
+        _fake_system(start_module, monkeypatch, drop=f"--uid-owner {UIDS['amail_broker']} -j ACCEPT")
+        with pytest.raises(RuntimeError, match=r"missing ACCEPT for \['amail_broker'\]"):
+            start_module.apply_egress_policy(_mail_config(["amail_broker", "admin"]))
+
+    @pytest.mark.parametrize("allow, why", [
+        ([], "non-empty list"),
+        ("amail_broker", "non-empty list"),
+        (["amail_broker", "amail_broker"], "duplicates"),
+        (["amail broker"], "not an account name"),
+        (["amail_broker", 7], "not an account name"),
+    ])
+    def test_the_declared_list_is_checked_when_the_config_loads(self, allow, why):
+        """The list is refused at load, before any rule is rendered: empty, not a list, a name
+        twice, or something that isn't an account name."""
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match=why):
+            _mail_config(allow)
+
     def test_without_an_allow_list_start_warns_that_r33_is_unmet(self, start_module, monkeypatch):
         _fake_system(start_module, monkeypatch, listed_extra="")
         logged = []
