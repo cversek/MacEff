@@ -2449,9 +2449,11 @@ class TestTrustIsMintedNotAccepted:
         valid at acceptance. The refusal reaches the sender with its reason (R18) and is recorded
         as the message's fate; nothing is delivered. A sender the registry doesn't declare passes,
         unverified, since the landing declares first and enforces second."""
+        from macf.amail.client import sent_disposition
         other = keyed["tmp"] / "keys" / "other.pem"
         generate_keypair(other)
         declare_keys(keyed, {ALPHA_CARD: keyed["beta_pub"]})
+        keyed["broker"].config.dispositions_dir = keyed["tmp"] / "dispositions"
 
         unsigned = keyed["broker"].submit("alpha", msg(body="no signature"))
         assert unsigned["ok"] is False
@@ -2460,6 +2462,9 @@ class TestTrustIsMintedNotAccepted:
         audit = (keyed["tmp"] / "audit.jsonl").read_text()
         assert unsigned["message_id"] in audit and "signature required (MIS-0004 R43)" in audit, \
             "the refusal is recorded, not only returned"
+        record = sent_disposition(keyed["broker"].config.dispositions_dir, unsigned["message_id"])
+        assert record and all(r["history"][-1]["state"] == "denied" for r in record["recipients"].values()), \
+            "the refusal is the message's fate"
 
         forged = msg(body="wrong key")
         forged.signature = sign(forged, load_private_key(other))
@@ -2474,6 +2479,16 @@ class TestTrustIsMintedNotAccepted:
         # Undeclared: the registry names no card for alpha, so its unsigned mail passes as before.
         declare_keys(keyed, {BETA_CARD: keyed["beta_pub"]})
         assert keyed["broker"].submit("alpha", msg(body="undeclared sender"))["ok"] is True
+
+    def test_an_untrusted_registry_refuses_nothing_and_says_so(self, keyed, capsys):
+        """R43 against a registry that can't be trusted: nothing can be verified, so nothing is
+        refused, and the broker warns on every submission that signatures aren't enforced."""
+        declare_keys(keyed, {ALPHA_CARD: keyed["beta_pub"]})
+        (keyed["tmp"] / "etc" / "registry.yaml").chmod(0o666)  # writable by others: untrusted
+        capsys.readouterr()
+        assert keyed["broker"].submit("alpha", msg(body="unsigned, registry untrusted"))["ok"] is True
+        err = capsys.readouterr().err
+        assert "signatures aren't enforced (R43)" in err and "can't be trusted" in err
 
     def test_the_broker_and_the_recipient_reach_one_verdict_on_the_same_bytes(self, keyed, tmp_path, capsys):
         """MIS-0004 R44: the broker's classification, written into the sidecar,

@@ -123,6 +123,7 @@ def registry_verdict(message: Any, card: str, registry: Registry,
         loaded = registry.load()
     except RegistryError as e:
         return {**verdict, "trust": TrustClass.UNVERIFIED.value, "keys_declared": None,
+                "registry_trusted": False,
                 "reason": f"the operator's registry can't be trusted ({e}); nothing verified"}
     entry = next((e for c, e in loaded.agents.items() if calling_card.same(c, card)), None)
     declared = list(entry.keys) if entry else []

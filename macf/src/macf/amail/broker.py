@@ -1916,7 +1916,7 @@ class Broker:
         keys valid now; the reason is the verdict's own words."""
         from .attest import sender_verdict
         verdict = sender_verdict(message, self.sender_card(message), self.registry, _accepted_now())
-        if verdict.get("keys_declared") is None and "can't be trusted" in str(verdict.get("reason")):
+        if verdict.get("registry_trusted") is False:
             # Not a refusal (see submit), but never silent: an untrusted registry means no agent
             # is held to its keys until the operator repairs it.
             print(f"⚠️ MACF: amail broker: {verdict['reason']}; signatures aren't enforced (R43)",
