@@ -583,7 +583,7 @@ class Summary:
 def summarize(since: float, cache_read_weight: Optional[float] = None) -> Summary:
     """Sum the ``usage_metered`` events' calls from the epoch time ``since`` on, an event that began
     before it prorated (``fraction_in``). ``by_cause`` is weighted with ``cache_read_weight`` (the
-    fit's, when given; else the price list's). An event is never older than its last call, so the
+    calibration's, when given; else the price list's). An event is never older than its last call, so the
     read stops at ``since``."""
     from macf.agent_events_log import read_events
     s = Summary()

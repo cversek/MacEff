@@ -92,12 +92,12 @@ def test_usage_rolled_is_written_at_most_once_a_minute(tmp_path):
     _write(t, _line("c"))
     um.meter_tick("sid", str(t), now=now + 90)
     rolled = _events(us.ROLLED_EVENT)
-    assert len(rolled) == 2 and rolled[1]["calls_1h"] == 3 and rolled[1]["fitted"] is False
+    assert len(rolled) == 2 and rolled[1]["calls_1h"] == 3 and rolled[1]["calibrated"] is False
 
 
 def test_hook_suffix_reads_one_rolled_event(monkeypatch):
     now = time.time()
-    append_event(us.ROLLED_EVENT, {"points_1h": 0.5, "calls_1h": 9, "rate": 1e-8, "fitted": False, "at": now})
+    append_event(us.ROLLED_EVENT, {"points_1h": 0.5, "calls_1h": 9, "rate": 1e-8, "calibrated": False, "at": now})
     seen = []
     real = us.read_events
 
@@ -109,7 +109,7 @@ def test_hook_suffix_reads_one_rolled_event(monkeypatch):
     monkeypatch.setattr(us, "read_events", counting)
     assert us.hook_suffix(now=now + 5) == "· me ~0.50%/1h"
     assert seen == [us.ROLLED_EVENT]
-    append_event(us.ROLLED_EVENT, {"points_1h": 0.25, "calls_1h": 9, "rate": 1e-8, "fitted": True, "at": now})
+    append_event(us.ROLLED_EVENT, {"points_1h": 0.25, "calls_1h": 9, "rate": 1e-8, "calibrated": True, "at": now})
     seen.clear()
     assert us.hook_suffix(now=now + 5) == "· me 0.25%/1h"
     assert len(seen) == 1
@@ -117,7 +117,7 @@ def test_hook_suffix_reads_one_rolled_event(monkeypatch):
 
 def test_hook_suffix_falls_back_when_the_rolled_event_is_stale():
     now = time.time()
-    append_event(us.ROLLED_EVENT, {"points_1h": 9.0, "calls_1h": 9, "rate": 1e-8, "fitted": True, "at": now})
+    append_event(us.ROLLED_EVENT, {"points_1h": 9.0, "calls_1h": 9, "rate": 1e-8, "calibrated": True, "at": now})
     row = {"input_tokens": 1_000_000, "calls": 1}
     append_event(um.EVENT, {"path": "p", "cause": "operator", "by_model": {"m-a": row}, "calls": 1})
     later = now + 1000  # rolled is over 15 minutes old, the metered event is inside the hour

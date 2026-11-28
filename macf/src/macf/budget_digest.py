@@ -6,9 +6,8 @@ Both read the agent's own events and nothing else; no state is kept beside the l
 Digest: at most once an hour, and only when the agent metered new spend since the last one,
 ``digest`` returns a short block: the hour's points, the split by cause, the largest driver,
 the agent's share of the account's movement and what one more turn costs at the current
-context. It records a ``usage_digest`` event so it does not repeat. The rate is the newest fit
-cached within the last hour, else the provisional constant; the hook path never regresses and
-never reads further back than an hour.
+context. It records a ``usage_digest`` event so it does not repeat. The rate is the newest
+calibration (``usage_share.calibration``), else the provisional constant; nothing here computes one.
 
 Sprint records: ``sprint_started`` and ``sprint_ended`` append ``sprint_budget_start`` and
 ``sprint_budget_end`` events holding the weekly percent and reset from the latest sample and
@@ -38,22 +37,18 @@ NAMES = {"input_tokens": "input", "cache_write_1h_tokens": "cache write",
 @dataclass(frozen=True, kw_only=True)
 class Rate:
     value: float  # points per weighted token
-    low: float
-    high: float
-    fitted: bool
-    read_weight: Optional[float] = None  # the fit's cache-read weight; None is the price list's
+    calibrated: bool
+    read_weight: Optional[float] = None  # the calibration's cache-read weight; None is the price list's
 
 
-def hour_rate(now: float) -> Rate:
-    """The newest ``usage_rate_fitted`` event of the last hour, else the provisional constant."""
-    from macf.usage_share import FIT_EVENT, _fit_from
-    for ev in read_events(reverse=True, scope="all", only=FIT_EVENT, since=now - HOUR):
-        fit = _fit_from(ev)  # the one reader of the event: an attempt that found no fit reads as None, quietly
-        if fit is not None:
-            return Rate(value=fit.rate, low=fit.low, high=fit.high, fitted=True, read_weight=fit.read_weight)
-        break
-    p = usage_meter.POINTS_PER_WEIGHTED_TOKEN
-    return Rate(value=p, low=p, high=p, fitted=False)
+def current_rate(now: float) -> Rate:
+    """The newest calibration (``usage_share.calibration``), else the provisional constant. Never
+    computes one: the rate is frozen until ``budget calibrate`` records another."""
+    from macf.usage_share import calibration
+    cal = calibration(now)
+    if cal is not None:
+        return Rate(value=cal.rate, calibrated=True, read_weight=cal.read_weight)
+    return Rate(value=usage_meter.POINTS_PER_WEIGHTED_TOKEN, calibrated=False)
 
 
 def _short(x: float) -> str:
@@ -79,7 +74,7 @@ class Spend:
 
 def _spend(now: float, read_weight: Optional[float] = None) -> Optional[Spend]:
     """The last hour's spend, each event prorated over its calls' span, cache reads weighed at
-    ``read_weight`` (the fit's) when given."""
+    ``read_weight`` (the calibration's) when given."""
     weights = dict(usage_meter.WEIGHTS)
     if read_weight is not None:
         weights["cache_read_input_tokens"] = read_weight
@@ -113,18 +108,16 @@ def _spend(now: float, read_weight: Optional[float] = None) -> Optional[Spend]:
 
 def _share_line(wt: float, rate: Rate, now: float) -> str:
     from macf import usage_share
-    prov = usage_share.RateFit(rate=rate.value, low=rate.low, high=rate.high, hours=0, r2=0.0,
-                               read_weight=usage_share.PRICE_READ_WEIGHT if rate.read_weight is None
-                               else rate.read_weight)
-    s = usage_share.share(1.0, now=now, fit=prov)
-    if s.account is None:
+    account = usage_share._account_movement(1.0, now)
+    if account is None:
         return "share: account movement unknown"
-    mine, capped = usage_share.cap_points(wt * rate.value, s.account)
-    out = f"share: {usage_share.CAP_MARK if capped else ''}{_points(mine)} of {s.account:g} account"
-    if rate.fitted:
-        out += f" ({_points(wt * rate.low)} to {_points(wt * rate.high)})"
-    else:
+    mine = wt * rate.value
+    mark = usage_share.STALE_MARK if usage_share.is_stale(mine, account) else ""
+    out = f"share: {mark}{_points(mine)} of {account:g} account"
+    if not rate.calibrated:
         out += " (provisional rate)"
+    elif mark:
+        out += " (calibration looks stale: budget calibrate)"
     return out
 
 
@@ -135,7 +128,7 @@ def digest(now: Optional[float] = None) -> Optional[str]:
         if ev.get("timestamp", 0) > now - HOUR:
             return None
         break
-    rate = hour_rate(now)
+    rate = current_rate(now)
     sp = _spend(now, rate.read_weight)
     if sp is None:
         return None
@@ -179,7 +172,7 @@ def _snapshot(now: float) -> dict:
         except ValueError as e:
             print(f"⚠️ MACF: sprint budget: unreadable reset {reset!r} ({e}); counting the last 7 days",
                   file=sys.stderr)
-    rate = hour_rate(now)
+    rate = current_rate(now)
     s = usage_meter.summarize(since, rate.read_weight)
     points = sum(s.by_cause.values()) * rate.value
     return {"percent": pct, "resets_at": reset, "agent_points": points}

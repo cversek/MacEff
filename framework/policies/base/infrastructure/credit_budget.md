@@ -45,7 +45,8 @@ intends for them. This policy says where the numbers come from, what may be kept
 - When do the hooks sample on their own, and when do they never touch a credential?
 - What happens when a refresh fails, and how long do the hooks wait before asking again?
 - What does the weekly field show when its refresh is failing, or its week has reset since the sample?
-- What does `me 0.9%/1h` after the weekly field mean, and why can it never exceed the account?
+- What does `me 0.9%/1h` after the weekly field mean, and why does what other agents do not move it?
+- How is the rate behind it calibrated, and what does a `!` before it ask for?
 
 **4 Intent: conserve, normal, burn**
 - What does each mode promise?
@@ -141,17 +142,29 @@ has reset, its percentage and rate describe a window that is over, so the field 
 **The own share** follows the weekly field once the agent's usage meter has counted calls: `· me 0.9%/1h`, the
 points this agent spent over the last hour. The window is written out because it is not the weekly field's: that
 rate is smoothed over two hours, this is a plain one-hour sum, so the two disagree during a burst and neither is
-wrong. Points come from the agent's metered tokens times a rate fitted against the account's counter
-(`budget rate`), and the same fit sets how much a cache read weighs against fresh input. The price list says a
-tenth; the counter has shown cache reads costing a small fraction of that, and at a tenth an hour of subagents
-re-reading a large context was once metered at more points than the whole account moved. An agent's figure is
-never shown above the account's own rise over the same hour plus one point (the counter's whole-percent step):
-above that it is capped and marked `≤`, as in `me ≤3.0%/1h`, and read as an upper bound. `~` marks the provisional
-rate, used until a fit exists, and `part` an hour not fully metered. `budget me` shows the same share over any
-window, says when it was capped, and puts the rest of the account's movement down to other agents and unmetered
-use, which can then be no lower than minus one point. Calls are placed at their own times: an event that gathered
-calls across a window's edge counts only the part inside, and a call copied into a forked subagent's transcript is
-counted once.
+wrong. Points are this agent's own metered tokens times a **frozen calibration**: a rate in points per weighted
+token, recorded once as a `usage_rate_calibrated` event and read from there by the hook line, `budget me` and the
+digest. Nothing on the hook or Stop path recomputes it from the current hours, so other agents on the same account
+working in the same hours cannot move this agent's figure. A rate refitted each hour against the account's counter
+could not tell this agent's use from theirs, and read their activity as this agent's cost (#1176).
+
+`budget calibrate` computes the rate as a lower envelope. The counter's change over a window is this agent's points
+plus everyone else's, and everyone else's is never negative, so each window gives an upper bound on the rate: the
+counter's change plus one (its whole-percent step) over this agent's weighted tokens in it. The calibration is the
+smallest of those bounds over every window of one to twelve whole hours in the last fourteen days that has a
+counter reading at both ends, no weekly reset inside and this agent active in it. Other agents' use can only raise a
+window's bound, never lower it, so a busy hour of theirs loosens that window and is simply not the one chosen. The
+command prints the rate, the window that set it and how many were considered; `--dry-run` prints without recording.
+Cache reads weigh a tenth of fresh input, a constant chosen by an earlier fit that agreed with the price list. The
+rate is an upper bound, and it tightens as the agent works through hours in which the account barely moves; until
+the first calibration the provisional constant stands in, marked `~`. `part` marks an hour not fully metered.
+
+The account's movement is kept only as a sanity check. When this agent's points over a window come to more than the
+account moved plus one, the figure is shown as it is, not capped, and marked `!`, as in `me !3.6%/1h`: the
+calibration looks stale, and `budget me` says so and names `budget calibrate`. `budget me` shows the share over any
+window and puts the rest of the account's movement down to other agents and unmetered use. Calls are placed at their
+own times: an event that gathered calls across a window's edge counts only the part inside, and a call copied into a
+forked subagent's transcript is counted once.
 
 The hooks refresh the sample themselves at most every ten minutes (`MACEFF_BUDGET_AUTOSAMPLE_MIN`) with a short
 timeout, and **only for an agent that has sampled in the last week**: an installation that never asked for its budget

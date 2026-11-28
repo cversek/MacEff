@@ -832,9 +832,9 @@ def cmd_budget_ticks(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_budget_rate(args: argparse.Namespace) -> int:
+def cmd_budget_calibrate(args: argparse.Namespace) -> int:
     from macf import usage_share
-    print(usage_share.run_rate(args.window))
+    print(usage_share.run_calibrate(dry_run=args.dry_run))
     return 0
 
 
@@ -13218,9 +13218,10 @@ def _build_parser() -> argparse.ArgumentParser:
     b = budget_sub.add_parser("me", help="this agent's own usage from its transcripts: tokens, models, causes, points")
     b.add_argument("--since", default="1d", metavar="AGE", help="window: 1h, 1d, 7d, or a date (default 1d)")
     b.set_defaults(func=cmd_budget_me)
-    b = budget_sub.add_parser("rate", help="fit this agent's points per weighted token against the account's counter")
-    b.add_argument("--window", type=float, default=48.0, metavar="HOURS", help="hours to fit over (default 48)")
-    b.set_defaults(func=cmd_budget_rate)
+    b = budget_sub.add_parser("calibrate", help="freeze this agent's points per weighted token: the lower "
+                              "envelope of the account's counter over its own tokens, last 14 days")
+    b.add_argument("--dry-run", action="store_true", help="print the calibration without recording it")
+    b.set_defaults(func=cmd_budget_calibrate)
     b = budget_sub.add_parser("ticks", help="fit points per weighted token from the counter's whole-percent crossings")
     b.add_argument("--since", default="48h", metavar="AGE", help="window: 12h, 2d, or a date (default 48h)")
     b.set_defaults(func=cmd_budget_ticks)
