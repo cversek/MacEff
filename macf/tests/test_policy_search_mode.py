@@ -38,6 +38,7 @@ class _Table:
         self.hybrid_error = hybrid_error
         self.indices = list(indices)
         self.created = []
+        self.replaced = []
         self.row = {"policy_name": "git_discipline", "_distance": 0.25, "content": "x" * 10,
                     "section_count": 1}
 
@@ -51,6 +52,7 @@ class _Table:
 
     def create_fts_index(self, column, replace=False):
         self.created.append(column)
+        self.replaced.append(replace)
 
 
 def _searcher(table):
@@ -98,6 +100,14 @@ def test_checking_for_the_full_text_index_writes_nothing():
                                                       "message": "full-text index present: content_idx"}
     assert absent.created == [] and present.created == [], "a check never creates an index"
     assert _searcher(absent).ensure_fts_index()["fts_available"] is True and absent.created == ["content"]
+    assert absent.replaced == [True], "creation replaces any index already there, as real LanceDB requires"
+
+
+def test_a_vector_index_alone_is_not_a_full_text_index():
+    """Only an FTS index counts: a table holding only a vector index (LanceDB lists it as IvfPq)
+    must not read as hybrid-ready, or the check repeats the misreport this fix removes."""
+    vector_only = _Table(indices=[_Index("embedding_idx", "IvfPq")])
+    assert _searcher(vector_only).check_fts_support()["fts_available"] is False
 
 
 def test_an_unreadable_index_list_is_reported_as_unavailable():
