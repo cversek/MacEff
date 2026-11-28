@@ -1,0 +1,3 @@
+### Fixed
+
+- **Policy search says which mode ran** (`hybrid_search/policy_search.py`, `utils/recommend.py`, #1170). The hybrid call fell back to vector search on every query, because it passed no query text and the table had no full-text index, and a catch-all swallowed the error. The recommender then labelled every result `hybrid`. Now a fallback warns once per process with its reason (results are "semantic only"), the result carries `fallback_reason`, and each recommendation is labelled with the mode that actually ran. Turning real hybrid on is left to MIS-0006's landing, because it changes the ranking. `check_fts_support()` no longer creates the full-text index it checks for; `ensure_fts_index()` does that.
