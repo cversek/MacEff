@@ -36,7 +36,7 @@ def _warn_fallback_once(reason: str) -> None:
     if _FALLBACK_WARNED:
         return
     _FALLBACK_WARNED = True
-    print(f"⚠️ MACF: policy search: hybrid is unavailable, so results are vector only ({reason})",
+    print(f"⚠️ MACF: policy search: hybrid is unavailable, so results are semantic only ({reason})",
           file=sys.stderr)
 
 

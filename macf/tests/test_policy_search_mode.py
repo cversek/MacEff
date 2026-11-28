@@ -71,7 +71,7 @@ def test_a_fallback_is_reported_as_a_fallback_and_warned_once(capsys):
     assert first["search_type"] == "semantic" and second["search_type"] == "semantic"
     assert "Text query must be a string" in first["fallback_reason"]
     err = capsys.readouterr().err
-    assert err.count("hybrid is unavailable, so results are vector only") == 1, "warned once, not per query"
+    assert err.count("hybrid is unavailable, so results are semantic only") == 1, "warned once, not per query"
 
 
 def test_a_hybrid_search_that_runs_says_hybrid_with_no_reason(capsys):
@@ -98,3 +98,12 @@ def test_checking_for_the_full_text_index_writes_nothing():
                                                       "message": "full-text index present: content_idx"}
     assert absent.created == [] and present.created == [], "a check never creates an index"
     assert _searcher(absent).ensure_fts_index()["fts_available"] is True and absent.created == ["content"]
+
+
+def test_an_unreadable_index_list_is_reported_as_unavailable():
+    """A list that can't be read is no evidence of an index, so the check says unavailable and why."""
+    class _Broken(_Table):
+        def list_indices(self):
+            raise OSError("table directory unreadable")
+    r = _searcher(_Broken()).check_fts_support()
+    assert r["fts_available"] is False and "can't be read" in r["message"]
