@@ -16,9 +16,10 @@ A grant can also be revoked before its date, which no date shows. That case stil
 the session's own authentication failure.
 """
 import json
+import os
 import sys
 import time
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Iterable, Optional
 
 #: The event the daemon records.
 EVENT = "pd_login_state"
@@ -29,6 +30,28 @@ EXPIRING_S = EXPIRING_DAYS * 86400.0
 POLL_S = 3600.0
 #: The longest the daemon goes without recording the verdict, changed or not.
 RECORD_EVERY_S = 86400.0
+#: The notice that tells the agent its login is near its end, or past it (#1161).
+NOTICE = "pd_login_expiring"
+#: Each warning, recorded before its notice is raised, so a restarted daemon doesn't warn twice.
+EVENT_WARNED = "pd_login_warned"
+#: The second warning's time before the end; the first is the warning window, the last the end itself.
+LAST_DAY_S = 86400.0
+
+
+def warn_steps(expiring_s: float = EXPIRING_S) -> list:
+    """The times before a grant's end at which the agent is warned, earliest first: the warning
+    window, one day, and the end. A window of a day or less leaves out the one-day step."""
+    if expiring_s > LAST_DAY_S:
+        return [expiring_s, LAST_DAY_S, 0.0]
+    if expiring_s > 0:
+        return [expiring_s, 0.0]
+    return [0.0]
+
+
+def warn_step(seconds_left: float, expiring_s: float = EXPIRING_S) -> int:
+    """How many of the warning steps a grant with *seconds_left* has reached: 0 outside the window,
+    the number of steps once it has ended."""
+    return sum(1 for t in warn_steps(expiring_s) if seconds_left <= t)
 
 #: ``unknown``: no date to judge (an API key, a credential without the field, none reachable, or
 #: one of several on a shared macOS login). ``error``: the check itself raised.
@@ -90,6 +113,36 @@ def read_assessment(now: Optional[float] = None,
     return assess(raw, now, expiring_s=expiring_s)
 
 
+def credential_fingerprint(reader: Optional[Callable[[], str]] = None) -> Optional[tuple]:
+    """What changes when anyone logs in again on this account: the stored credential's refresh grant end,
+    or its access token's end only when it states no refresh grant; None when there is no credential to
+    read or it states neither. Only those two fields are read, as in ``assess``: no token leaves
+    the read. A session waiting on its login compares this with what it saw when it failed, so
+    one ``/login`` returns every session sharing the credential to running, not only the one it was
+    typed in (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person))."""
+    from macf.budget import BudgetError, read_credential
+    if reader is None and os.environ.get("CLAUDE_CONFIG_DIR"):
+        # A seat with a config dir of its own keeps its own credential, and the reader takes the default
+        # Keychain entry or ~/.claude: another seat's login would end this seat's wait. Until the reader
+        # follows the config dir (#1154), such a seat's wait ends only by a reply (CTB's review of #1163).
+        return None  # noqa: MACEFF003 - a credential that may be another seat's is no evidence; the wait stands
+    try:
+        raw = (reader or read_credential)()
+    except BudgetError:
+        return None  # noqa: MACEFF003 - no credential reachable is a state, not a fault: no dates to compare, so the wait stands
+    # A credential that isn't the client's JSON raises: the caller warns and leaves the wait as it is.
+    oauth = json.loads(raw).get("claudeAiOauth") or {}
+    # The refresh grant's end changes only when someone logs in again. The access token's end changes at
+    # every routine refresh, so on a shared credential a healthy session's refresh would end the others'
+    # waits while they still can't authenticate (Ira's review of #1163). It is read only when the credential
+    # states no refresh grant at all.
+    refresh = _seconds(oauth.get("refreshTokenExpiresAt"))
+    if refresh is not None:
+        return ("refresh", refresh)
+    access = _seconds(oauth.get("expiresAt"))
+    return ("access", access) if access is not None else None
+
+
 def warn_seconds(declaration) -> float:
     """The login warning window in seconds: the declaration's ``reports.warn_days``, else the default. One
     reading at every site that judges a login's expiry, so none of them can ignore the declaration (#1027)."""
@@ -125,9 +178,17 @@ class HostedLoginCheck:
 
     def __init__(self, card: str, append: Callable[[str, dict], object],
                  assess_now: Optional[Callable[[], Dict[str, object]]] = None,
-                 clock: Callable[[], float] = time.monotonic, expiring_s: float = EXPIRING_S):
+                 clock: Callable[[], float] = time.monotonic, expiring_s: float = EXPIRING_S,
+                 raise_notice: Optional[Callable[[str, str], object]] = None,
+                 warned_before: Optional[Callable[[], Iterable[dict]]] = None):
         self.card, self.append, self.assess_now, self.clock = card, append, assess_now, clock
         self.expiring_s = expiring_s
+        #: Raises the agent's notice; None where no agent is served, and then nothing warns.
+        self.raise_notice = raise_notice
+        #: This log's ``pd_login_warned`` records, newest first.
+        self.warned_before = warned_before
+        #: (end date warned of, step reached); None until read back from the log.
+        self._warned: Optional[tuple] = None
         self.last_poll: Optional[float] = None
         self.last_record: Optional[float] = None
         self.last_state: Optional[str] = None
@@ -154,3 +215,43 @@ class HostedLoginCheck:
         if verdict.get("state") != self.last_state or due:
             self.append(EVENT, {**verdict, "agent": self.card})
             self.last_state, self.last_record = verdict.get("state"), now
+        self._warn(verdict)
+
+    def _read_back(self) -> None:
+        """The newest warning this agent's log holds, read once, so a restart doesn't repeat it."""
+        self._warned = (None, 0)
+        if self.warned_before is None:
+            return
+        try:
+            for record in self.warned_before():
+                data = record.get("data") or {}
+                if data.get("agent") == self.card:
+                    self._warned = (data.get("refresh_expires_at"), int(data.get("step") or 0))
+                    return
+        except Exception as e:  # noqa: BLE001 - an unreadable log costs at most one repeated warning
+            print(f"⚠️ MACF: pd: earlier login warnings couldn't be read ({type(e).__name__}); "
+                  f"one may be repeated", file=sys.stderr)
+
+    def _warn(self, verdict: Dict[str, object]) -> None:
+        """Warn the agent once at each step its login reaches: the warning window, a day, the end
+        (#1161). A renewed login has a new end date, so its steps start again. A verdict with no
+        date ("unknown", "error") warns of nothing: no date shows how near an end is."""
+        if self.raise_notice is None:
+            return
+        ends, hours = verdict.get("refresh_expires_at"), verdict.get("hours_left")
+        if not isinstance(ends, (int, float)) or not isinstance(hours, (int, float)):
+            return
+        if self._warned is None:
+            self._read_back()
+        warned_ends, warned_step = self._warned
+        if warned_ends != ends:
+            warned_step = 0
+        step = warn_step(hours * 3600.0, self.expiring_s)
+        if step <= warned_step:
+            self._warned = (ends, warned_step)
+            return
+        self.append(EVENT_WARNED, {"agent": self.card, "step": step, "of": len(warn_steps(self.expiring_s)),
+                                   "refresh_expires_at": ends, "hours_left": hours,
+                                   "state": verdict.get("state"), "detail": verdict.get("detail")})
+        self._warned = (ends, step)
+        self.raise_notice(NOTICE, f"login:{step}:{int(ends)}")

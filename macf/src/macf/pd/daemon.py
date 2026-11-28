@@ -247,7 +247,11 @@ class Daemon:
                                    self.notifier.raise_notice, time.monotonic)
         #: The agent's login, read from its stored credential's expiry dates, never by a model turn (#884).
         from macf.pd.login import HostedLoginCheck, warn_seconds
-        self.login = HostedLoginCheck(self.card, append_event, expiring_s=warn_seconds(self.core.declaration))
+        from macf.pd.login import EVENT_WARNED as LOGIN_WARNED
+        self.login = HostedLoginCheck(self.card, append_event, expiring_s=warn_seconds(self.core.declaration),
+                                      raise_notice=self.notifier.raise_notice,
+                                      warned_before=lambda: read_events(reverse=True, scope="all",
+                                                                        only=(LOGIN_WARNED,)))
         self.core.on_notice = self.notifier.raise_notice    # the core's own notices (R60)
         self.scheduler.on_notice = self.notifier.raise_notice   # a denied prompt run (R32)
         half = self.core.declaration.half_served_routes()

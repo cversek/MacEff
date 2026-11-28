@@ -111,10 +111,10 @@ def _plan_attach(response: Optional[dict], session_unit: str, *,
     if status is None:
         return AttachPlan(NONE, reason=why)
     state = status.get("state")
-    # A session that can't log in is held failed but kept running (MIS-0002-R19), and attaching
-    # to it to run /login is the one way back (persistent_layer 3.2). It is live for attach.
-    login = status.get("auth_failed") if state == "failed" else None
-    if state not in _LIVE and not login:
+    # A session that can't log in waits on a person and is kept running (MIS-0002-R19), and
+    # attaching to it to run /login is the one way back (persistent_layer 3.2). Waiting on a
+    # person is a live state, so this check already lets it through; plan_attach names the remedy.
+    if state not in _LIVE:
         return AttachPlan(NONE, reason=f"the session unit is {state}; no session runs")
     pid = status.get("pid")
     if not pid:
@@ -162,16 +162,18 @@ def _plan_attach(response: Optional[dict], session_unit: str, *,
 def plan_attach(response: Optional[dict], session_unit: str, **probes) -> AttachPlan:
     """Decide how to attach to ``session_unit`` from the daemon's status ``response``.
 
-    A session held failed because it can't log in (MIS-0002-R19 (auth_failure_MUST_read_failed))
-    still runs, and attaching to run ``/login`` in it is the way back, so its plan says so
+    A session waiting on its login (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person)) still
+    runs, and attaching to run ``/login`` in it is the way back, so its plan says so
     (persistent_layer 3.2, MacEff #1015). Everything else is as ``_plan_attach`` decides.
     """
     plan = _plan_attach(response, session_unit, **probes)
     status, _ = _session_unit(response, session_unit)
-    login = status.get("auth_failed") if status and status.get("state") == "failed" else None
+    from macf.pd.interface import AUTH_REMEDY  # here, not at the top: the CLI parser must build light
+    kind = status.get("waiting_on") if status else None
+    login = (status.get("auth_failed") or "authentication failed") if kind in AUTH_REMEDY else None
     if login and plan.kind != NONE:
         return AttachPlan(plan.kind, plan.argv,
-                          reason=f"the session can't log in ({login}): attach and run /login; {plan.reason}")
+                          reason=f"the session can't authenticate ({login}): {AUTH_REMEDY[kind]}; {plan.reason}")
     return plan
 
 def readout_line(plan: AttachPlan) -> str:

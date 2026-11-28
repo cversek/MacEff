@@ -142,3 +142,119 @@ def test_clear_input_refuses_another_pane(capsys):
         assert _cmd_inject(args) == 1
     clear.assert_not_called()
     assert "own pane" in capsys.readouterr().err
+
+
+# --- the box among the background-task panel and the conversation (#1134) -----------
+
+RULE = "─" * 60
+NB = " "
+PANEL = [
+    "  ⏵⏵ auto mode on · 5 background tasks",
+    "  ● explore-agent  running  2m",
+    "  ● review-agent   running  41s",
+    "  ● bash: make test  running",
+    "  ● bash: tail -f log  running",
+    RULE,
+    "  esc to interrupt",
+]
+
+
+def _pane(*box_rows, panel=PANEL):
+    """A captured pane as tmux returns it: real newlines, an echoed prompt in the
+    conversation above, the box (prompt, then a no-break space), and the panel below."""
+    rows = [f"❯{NB}{r}" if i == 0 else f"  {r}" for i, r in enumerate(box_rows)] or [f"❯{NB}"]
+    # the earlier block is a framed screen quoted in the conversation: a prompt line between rules
+    return "\n".join([RULE, "❯ an earlier prompt, framed", RULE, "● the answer to it", "",
+                      RULE, *rows, RULE, *panel]) + "\n"
+
+
+def _clear_panes(panes):
+    """Run clear_own_input reading the real box locator over *panes* in turn."""
+    seq, presses = iter(panes), []
+
+    def run(argv, *a, **k):
+        presses.append(argv[-1])
+        return SimpleNamespace(returncode=0)
+
+    with patch.object(supervisor, "own_pane_target", return_value="seat"), \
+         patch.object(supervisor, "_resolve_pane_target", return_value={"tmux_session": "s"}), \
+         patch.object(supervisor, "_tmux_available", return_value=True), \
+         patch.object(supervisor, "capture_pane", side_effect=lambda t: next(seq)), \
+         patch.object(supervisor, "_framework_typed", return_value="wake"), \
+         patch.object(supervisor, "_record_keys_sent"), \
+         patch.object(supervisor, "_record_box_cleared"), \
+         patch.object(supervisor.subprocess, "run", side_effect=run):
+        rc = supervisor.clear_own_input("MAIL CLOCK:", sleep=lambda s: None)
+    return rc, presses
+
+
+def test_the_box_is_the_last_prompt_line_not_the_echoed_one_or_the_panel():
+    with patch.object(supervisor, "capture_pane", return_value=_pane(MAIL)):
+        assert supervisor._draft_in_box("seat") == MAIL
+
+
+def test_the_no_break_space_after_the_prompt_is_not_text():
+    with patch.object(supervisor, "capture_pane", return_value=_pane()):
+        assert supervisor._draft_in_box("seat") == ""
+
+
+def test_two_rows_with_the_panel_below_are_cleared_over_several_presses():
+    full = _pane(MAIL, "second row of it")
+    one = _pane(MAIL)
+    # box read before pressing, then after each press (the panel never moves here)
+    rc, presses = _clear_panes([full, full, one, _pane()])
+    assert rc == 0 and presses == ["C-u"] * 3
+
+
+def test_a_panel_that_grows_between_presses_does_not_lose_the_box():
+    big = PANEL + ["  ● another-agent  running"]
+    rc, presses = _clear_panes([_pane(MAIL, "tail"), _pane(MAIL, panel=big),
+                                _pane(MAIL[:15], panel=PANEL[:3]), _pane(panel=big)])
+    assert rc == 0 and len(presses) == 3
+
+
+def test_text_that_is_not_the_expected_text_stops_the_clearing(capsys):
+    rc, presses = _clear_panes([_pane(MAIL), _pane("dear operator, one more thing")])
+    assert rc == 1 and len(presses) == 1
+    assert "gained text" in capsys.readouterr().err
+
+
+def test_a_selection_line_under_a_question_is_not_taken_for_the_box():
+    from macf.pd import wake
+    plain = [RULE, f"❯{NB}draft", RULE, RULE, "Do you want to proceed?", "❯ 1. Yes", "  2. No", RULE]
+    box = wake._locate_box(plain, [i for i, line in enumerate(plain) if line == RULE])
+    assert (box.top, box.bottom, box.rows) == (0, 2, [1])
+
+
+def _rules(plain):
+    return [i for i, line in enumerate(plain) if line == RULE]
+
+
+def test_a_line_that_begins_with_a_no_break_space_before_the_prompt_is_a_prompt():
+    from macf.pd import wake
+    assert wake._is_prompt(f"{NB}❯{NB}text")
+
+
+def test_the_fallback_prompt_glyph_is_found():
+    from macf.pd import wake
+    plain = [RULE, "> draft", RULE]
+    box = wake._locate_box(plain, _rules(plain))
+    assert (box.top, box.bottom, box.rows) == (0, 2, [1])
+
+
+def test_a_prompt_with_a_rule_only_below_is_no_box():
+    from macf.pd import wake
+    plain = ["❯ draft", RULE]
+    assert wake._locate_box(plain, _rules(plain)) is None
+
+
+def test_a_prompt_with_a_rule_only_above_is_no_box():
+    from macf.pd import wake
+    plain = [RULE, "❯ draft"]
+    assert wake._locate_box(plain, _rules(plain)) is None
+
+
+def test_blank_lines_inside_the_box_are_not_rows():
+    from macf.pd import wake
+    plain = [RULE, f"❯{NB}first", "", "  second", RULE]
+    assert wake._locate_box(plain, _rules(plain)).rows == [1, 3]

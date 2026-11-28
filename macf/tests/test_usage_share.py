@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import pytest
 
 from macf import usage_meter, usage_share
-from macf.agent_events_log import get_log_path
+from macf.agent_events_log import get_log_path, read_events
 
 TRUE_RATE = 4e-8  # points per weighted token
 HOUR = 3600.0
@@ -46,7 +46,7 @@ def _write(rows):
 
 def _metered(t, tokens):
     return {"timestamp": t, "event": usage_meter.EVENT,
-            "data": {"by_model": {"m": {"input_tokens": tokens, "calls": 1}}, "calls": 1, "cause": "operator"}}
+            "data": {"by_model": {"m": {"input_tokens": tokens, "calls": 1}}, "calls": 5, "cause": "operator"}}
 
 
 def _sample(t, pct):
@@ -470,3 +470,48 @@ def test_the_rate_band_is_ten_times_either_way(factor, fits):
     assert (a.fit is not None) is fits
     if not fits:
         assert "degenerate" in a.reason and "10x" in a.reason and "provisional" in a.reason
+
+
+def test_hook_suffix_marks_a_window_shorter_than_an_hour():
+    now = time.time()
+    ev = _metered(now - 300, 2e6)
+    ev["data"]["metering_since"] = now - 600               # metering is ten minutes old
+    _write([ev])
+    assert usage_share.hook_suffix(now).endswith(usage_share.PARTIAL_MARK)
+
+
+def test_hook_suffix_leaves_a_fully_metered_busy_hour_unmarked():
+    now = time.time()
+    ev = _metered(now - 300, 2e6)
+    ev["data"]["metering_since"] = now - 4 * 3600
+    _write([ev])
+    assert not usage_share.hook_suffix(now).endswith(usage_share.PARTIAL_MARK)
+
+
+def test_hook_suffix_marks_a_one_call_hour():
+    now = time.time()
+    ev = _metered(now - 300, 2e6)
+    ev["data"]["metering_since"] = now - 4 * 3600
+    ev["data"]["calls"] = 1
+    _write([ev])
+    assert usage_share.hook_suffix(now).endswith(usage_share.PARTIAL_MARK)
+
+
+def test_part_mark_survives_the_rolled_event():
+    now = time.time()
+    ev = _metered(now - 300, 2e6)
+    ev["data"]["metering_since"] = now - 600
+    _write([ev])
+    assert usage_share.roll(now) is True
+    rolled = [e["data"] for e in read_events(reverse=False, scope="all", only=usage_share.ROLLED_EVENT)]
+    assert rolled[-1]["partial"] is True
+    assert usage_share.hook_suffix(now + 5).endswith(usage_share.PARTIAL_MARK)  # read from the rolled event
+
+
+def test_earliest_metering_since_decides_partial():
+    now = time.time()
+    a, b = _metered(now - 300, 2e6), _metered(now - 200, 2e6)
+    a["data"]["metering_since"] = now - 4 * 3600
+    b["data"]["metering_since"] = now - 600
+    _write([a, b])
+    assert not usage_share.hook_suffix(now).endswith(usage_share.PARTIAL_MARK)

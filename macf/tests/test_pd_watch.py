@@ -483,25 +483,29 @@ def test_a_drift_found_after_a_failed_check_is_still_an_alert(tmp_path):
 
 
 
-def _state(home, unit, age_s, state, reason, agent=CARD):
+def _state(home, unit, age_s, state, reason, agent=CARD, waiting_on=None):
     log = home / ".maceff" / "agent_events_log.jsonl"
     data = {"agent": agent, "unit": unit, "state": state, "pid": 4242, "proc_start": "777", "reason": reason}
+    if waiting_on:
+        data["waiting_on"] = waiting_on
     with log.open("a") as fh:
         fh.write(json.dumps({"timestamp": NOW - age_s, "event": pdi.EVENT_STATE, "data": data}) + "\n")
 
 
 def test_a_session_that_cannot_log_in_alerts_while_its_liveness_is_fresh(tmp_path):
     """An expired login leaves the session running and beating, so liveness alone read it
-    ALIVE for hours while it could do no work. Its recorded failure decides instead."""
+    ALIVE for hours while it could do no work. Its recorded login wait decides instead, keyed
+    on ``waiting_on``, and at the first read, since a login doesn't come back by itself
+    (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person); Ira on #1161, points 1 and 2)."""
     home, base, sink = _home(tmp_path, units=(("session", 120.0),)), tmp_path / "run", tmp_path / "sink.txt"
     _record(base)
-    _state(home, "session", age_s=600, state="failed",
+    _state(home, "session", age_s=5, state="waiting_on_a_person", waiting_on=pdi.LOGIN_WAIT,
            reason=f"{pdi.AUTH_FAILED_REASON}: Login expired · Please run /login")
     _stamp(home, "session", age_s=5, interval_s=120.0)
     config = _config(tmp_path, [home], sink)
     assert watch.run_pass(config, now=NOW, base=base, probe=ALL_RUNNING) == watch.EXIT_UNHEALTHY
     assert sink.read_text().count("ALERT") == 1
-    assert "Resident_1a2b3c session: AUTH-FAILED, needs /login" in sink.read_text()
+    assert "Resident_1a2b3c session: AUTH-FAILED, waits on a person, its login: attach and run /login" in sink.read_text()
     # The session is on its daemon's own socket, so the alert says how to reach it (#884).
     assert "macf_tools harness attach --card Resident_1a2b3c" in sink.read_text()
     # Logged in again: the core records running, and the watch sends one recovery.
@@ -509,6 +513,37 @@ def test_a_session_that_cannot_log_in_alerts_while_its_liveness_is_fresh(tmp_pat
     _stamp(home, "session", age_s=-90, interval_s=120.0)
     assert watch.run_pass(config, now=NOW + 120, base=base, probe=ALL_RUNNING) == watch.EXIT_HEALTHY
     assert "recovered: Resident_1a2b3c session: ALIVE" in sink.read_text()
+
+
+def test_a_prompt_wait_is_not_a_login_wait(tmp_path):
+    """A session at a permission prompt waits on a person too, and gets its allowance: only a
+    record whose ``waiting_on`` is the login reads AUTH-FAILED. Words alone don't make one: a
+    reason naming a failed login without the field is not a login wait (Ira on #1161, point 1)."""
+    home = _home(tmp_path, units=(("session", 120.0),))
+    _record(tmp_path / "run")
+    _state(home, "session", age_s=5, state="waiting_on_a_person", reason="waiting on a permission prompt")
+    _stamp(home, "session", age_s=5, interval_s=120.0)
+    verdict = lambda: watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)[1].verdict
+    assert verdict() == "ALIVE"
+    _state(home, "session", age_s=4, state="waiting_on_a_person",
+           reason=f"{pdi.AUTH_FAILED_REASON}: Login expired")
+    assert verdict() == "ALIVE"
+    _state(home, "session", age_s=3, state="waiting_on_a_person", waiting_on=pdi.LOGIN_WAIT,
+           reason=f"{pdi.AUTH_FAILED_REASON}: Login expired")
+    assert verdict() == "AUTH-FAILED"
+
+
+def test_a_rejected_api_key_is_an_auth_wait_with_its_own_remedy(tmp_path):
+    """A seat on an API key has no /login to run: a rejected key waits on a person to replace it, and
+    the alert says that remedy, not /login (CTB on #1161, point 1)."""
+    home = _home(tmp_path, units=(("session", 120.0),))
+    _record(tmp_path / "run")
+    _state(home, "session", age_s=3, state="waiting_on_a_person", waiting_on=pdi.CREDENTIAL_WAIT,
+           reason=f"{pdi.AUTH_FAILED_REASON}: Invalid API key · Fix external API key")
+    _stamp(home, "session", age_s=5, interval_s=120.0)
+    found = watch.check_home(home, NOW, tmp_path / "run", ALL_RUNNING)[1]
+    assert found.verdict == "AUTH-FAILED"
+    assert "replace the rejected API key" in found.detail and "/login" not in found.detail
 
 
 def test_a_failure_stands_only_for_the_process_recorded_failed(tmp_path):

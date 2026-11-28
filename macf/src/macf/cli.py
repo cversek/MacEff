@@ -822,6 +822,16 @@ def cmd_budget_me(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_budget_ticks(args: argparse.Namespace) -> int:
+    from macf import usage_ticks
+    try:
+        print(usage_ticks.run_ticks(args.since))
+    except ValueError as e:
+        print(f"budget ticks: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def cmd_budget_rate(args: argparse.Namespace) -> int:
     from macf import usage_share
     print(usage_share.run_rate(args.window))
@@ -11915,6 +11925,17 @@ def cmd_amail_contacts(args: argparse.Namespace) -> int:
     except BrokerUnavailable as e:
         print(f"❌ {e}")
         return 1
+    if not reply.get("ok", False):
+        # A refusal is not an empty list: a broker that predates the operation, or one that won't answer
+        # this agent, said so, and "no correspondents" would tell the agent it may write to nobody.
+        error = str(reply.get("error") or "the broker gave no reason")
+        hint = ("this broker was started before it learned this operation; restart it (the operator's step)"
+                if "unknown operation" in error else "")
+        if args.json:
+            print(json.dumps({"ok": False, "error": error, "hint": hint}, indent=2))
+        else:
+            print(f"❌ the broker refused to list correspondents: {error}" + (f"\n   {hint}" if hint else ""))
+        return 1
     entries = list(reply.get("contacts") or [])
     needle = (args.filter or "").strip().lower()
     if needle:
@@ -12945,12 +12966,24 @@ def cmd_knowledge_eval(args: argparse.Namespace) -> int:
         digest = save_snapshot(snap, Path(args.save_snapshot))
         print(f"📸 snapshot {digest[:12]} saved to {args.save_snapshot} (owner-only: it holds private text)")
     try:
-        out = evaluate(Corpus(snap, digest), args.rankers or ["random", "today", "idf", "like"],
+        corpus = Corpus(snap, digest)
+        corpus.context = getattr(args, "context", "plain")
+        if getattr(args, "context_file", None):
+            try:
+                written = json.loads(Path(args.context_file).read_text())
+            except (OSError, ValueError) as e:
+                print(f"❌ cannot read the context file {args.context_file}: {e}")
+                return 2
+            corpus.model_contexts = written.get("contexts", written) if isinstance(written, dict) else {}
+        out = evaluate(corpus, args.rankers or ["random", "today", "idf", "like"],
                        sources=args.labels or ("xref", "citations", "same_subject"), which=args.split,
-                       seed=args.split_seed, compare=tuple(args.compare) if args.compare else None)
+                       seed=args.split_seed, compare=tuple(args.compare) if args.compare else None,
+                       boot=getattr(args, "boot", 2000))
     except EvalRefused as e:
         print(f"❌ refused: {e}")
         return 2
+    if getattr(corpus, "model_contexts", None):
+        out["chart"]["model_contexts"] = sum(1 for n in corpus.web if corpus.model_contexts.get(n))
     print(json.dumps(out, indent=2) if args.json_output else format_report(out))
     return 0
 
@@ -13188,6 +13221,9 @@ def _build_parser() -> argparse.ArgumentParser:
     b = budget_sub.add_parser("rate", help="fit this agent's points per weighted token against the account's counter")
     b.add_argument("--window", type=float, default=48.0, metavar="HOURS", help="hours to fit over (default 48)")
     b.set_defaults(func=cmd_budget_rate)
+    b = budget_sub.add_parser("ticks", help="fit points per weighted token from the counter's whole-percent crossings")
+    b.add_argument("--since", default="48h", metavar="AGE", help="window: 12h, 2d, or a date (default 48h)")
+    b.set_defaults(func=cmd_budget_ticks)
     b = budget_sub.add_parser("mode", help="the operator's intent for the allowance")
     mode_sub = b.add_subparsers(dest="budget_mode_cmd", required=True)
     m = mode_sub.add_parser("set", help="conserve | normal | burn")
@@ -15096,7 +15132,9 @@ def _build_parser() -> argparse.ArgumentParser:
     kg_eval.add_argument("--split", choices=["dev", "held"], default="dev",
                          help="dev (default), or held: spent once read, and recorded")
     kg_eval.add_argument("--ranker", dest="rankers", action="append", metavar="NAME",
-                         help="random, today, idf or like; repeat for several (default: all four)")
+                         help="random, today, idf or like; or a text ranker: bm25, dense, hybrid-cc[:ALPHA] "
+                              "(ALPHA the weight on dense, default 0.5), hybrid-rrf[:K] (default 60); "
+                              "repeat for several (default: the four concept rankers)")
     kg_eval.add_argument("--labels", action="append", choices=["xref", "citations", "same_subject"],
                          help="label source; repeat for several (default: all three)")
     kg_eval.add_argument("--compare", nargs=2, metavar=("A", "B"),
@@ -15107,6 +15145,14 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="leave out files whose path contains TEXT (an experiment's own folder)")
     kg_eval.add_argument("--split-seed", default="knowledge-eval-heldout", metavar="SEED",
                          help="the seed of the held split; a new seed is a new seal")
+    kg_eval.add_argument("--context", choices=["plain", "header", "model"], default="plain",
+                         help="what the text rankers index: the text (plain, default), or a header naming "
+                              "the artifact's kind, date, title and concepts, then the text; or model: "
+                              "a model-written context from --context-file, then the text")
+    kg_eval.add_argument("--context-file", metavar="PATH",
+                         help="JSON of model-written contexts by node id (or under a 'contexts' key)")
+    kg_eval.add_argument("--boot", type=int, default=2000, metavar="N",
+                         help="bootstrap resamples for the intervals (default 2000)")
     kg_eval.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
     kg_eval.set_defaults(func=cmd_knowledge_eval)
 

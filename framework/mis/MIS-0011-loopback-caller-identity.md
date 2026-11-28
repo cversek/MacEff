@@ -2,12 +2,12 @@
 
 **Number**: 0011
 **Type**: Amendment
-**Status**: Draft
+**Status**: Accepted
 **Authors**: the head maintainer
-**Secretary**: none
+**Secretary**: the Secretary of deliberation #493 (MIS-0002), as for MIS-0010
 **Created**: 2026-11-22
 **Amends**: MIS-0002: R80 (pd_MUST-NOT_listen_on_network); adds R202 (data_service_MUST-NOT_listen_on_tcp), R203 (data_service_socket_MUST_sit_in_private_directory), R204 (data_service_MUST_check_peer_account)
-**Resolution**: none
+**Resolution**: Accepted by the repo owner, 2026-11-28 10:07 EST, chosen in a terminal dialog with the container-management maintainer and relayed verbatim on pull request #1144 (comment 7241257021); his merge of this pull request confirms it. Both of MIS-0002's other maintainers signed off before acceptance, as MIS-0001-R57 (amendment_MUST_have_maintainer_signoff) requires: the container-management and host-side maintainers, at 1177226d. No objection was recorded.
 
 ---
 

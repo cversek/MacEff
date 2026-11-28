@@ -1807,19 +1807,21 @@ def test_a_daemon_says_at_start_where_the_allowlist_and_its_declaration_differ(t
 LOGIN_EXPIRED = "Login expired · Please run /login"
 
 
-def test_a_failed_login_holds_the_session_failed(make_core, script):
-    """A session that can't authenticate reads failed, with what the harness said, and is not
-    stopped or restarted, because a restart can't log in; once a request goes through again it
-    reads running, as the same process (MIS-0002-R19 (auth_failure_MUST_read_failed))."""
+def test_a_failed_login_waits_on_a_person(make_core, script):
+    """A session that can't authenticate waits on a person, with the login named as data and what
+    the harness said, and is not stopped or restarted, because a restart can't log in; once it
+    can authenticate again it reads running, as the same process
+    (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person))."""
     core = make_core([make_unit("session", script, {"auth_failed": LOGIN_EXPIRED, "auth_failed_for": 1.5})])
     core.boot()
 
-    assert drive(core, lambda: core.state("session") == "failed")
+    assert drive(core, lambda: core.state("session") == "waiting_on_a_person")
     pid = core.pid("session")
-    failed = events("pd_unit_state", "session")[-1]
-    assert failed["reason"] == f"authentication failed: {LOGIN_EXPIRED}" and failed["pid"] == pid
-    # Failed for its login, it keeps its process: still failed, the same pid, nothing restarted.
-    assert not drive(core, lambda: core.state("session") != "failed", timeout=1.0)
+    waiting = events("pd_unit_state", "session")[-1]
+    assert waiting["reason"] == f"authentication failed: {LOGIN_EXPIRED}" and waiting["pid"] == pid
+    assert waiting["waiting_on"] == "login"
+    # Waiting on its login, it keeps its process: still waiting, the same pid, nothing restarted.
+    assert not drive(core, lambda: core.state("session") != "waiting_on_a_person", timeout=1.0)
     assert core.pid("session") == pid
 
     assert drive(core, lambda: core.state("session") == "running")
@@ -1828,32 +1830,32 @@ def test_a_failed_login_holds_the_session_failed(make_core, script):
     assert states("session").count("starting") == 1
 
 
-def test_a_unit_still_failed_for_its_login_is_recorded_failed_again_each_day(make_core, script):
-    """The failed record is written once, and a unit that beats steadily writes no other state
+def test_a_session_still_waiting_on_its_login_is_recorded_again_each_day(make_core, script):
+    """The login wait is recorded once, and a unit that beats steadily writes no other state
     event, so the record can be rotated away or outlive the outside watch's lookback while the
     process keeps beating, and the watch reads it healthy (#896). The daemon says it again once a
-    day, as the same state of the same process, for as long as the failure lasts."""
-    from macf.pd.core import FAILED_RERECORD_S
+    day, as the same state of the same process, for as long as the wait lasts."""
+    from macf.pd.core import LOGIN_WAIT_RERECORD_S
     clock = [1_800_000_000.0]
     core = make_core([make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})], wall=lambda: clock[0])
     core.boot()
-    assert drive(core, lambda: core.state("session") == "failed")
+    assert drive(core, lambda: core.state("session") == "waiting_on_a_person")
     pid = core.pid("session")
-    once = states("session").count("failed")
+    once = states("session").count("waiting_on_a_person")
 
-    clock[0] += FAILED_RERECORD_S - 60          # not a day yet: nothing more is said
-    assert not drive(core, lambda: states("session").count("failed") > once, timeout=0.5)
+    clock[0] += LOGIN_WAIT_RERECORD_S - 60          # not a day yet: nothing more is said
+    assert not drive(core, lambda: states("session").count("waiting_on_a_person") > once, timeout=0.5)
 
     clock[0] += 120                              # a day since it failed
-    assert drive(core, lambda: states("session").count("failed") == once + 1)
+    assert drive(core, lambda: states("session").count("waiting_on_a_person") == once + 1)
     again = events("pd_unit_state", "session")[-1]
-    assert again["state"] == "failed" and again["pid"] == pid
-    assert again["reason"].startswith(f"authentication failed: {LOGIN_EXPIRED}") and "still failed" in again["reason"]
+    assert again["state"] == "waiting_on_a_person" and again["pid"] == pid and again["waiting_on"] == "login"
+    assert again["reason"].startswith(f"authentication failed: {LOGIN_EXPIRED}") and "still waiting" in again["reason"]
 
-    assert not drive(core, lambda: states("session").count("failed") > once + 1, timeout=0.5)
-    clock[0] += FAILED_RERECORD_S + 1            # and each day after
-    assert drive(core, lambda: states("session").count("failed") == once + 2)
-    assert core.state("session") == "failed" and core.pid("session") == pid
+    assert not drive(core, lambda: states("session").count("waiting_on_a_person") > once + 1, timeout=0.5)
+    clock[0] += LOGIN_WAIT_RERECORD_S + 1            # and each day after
+    assert drive(core, lambda: states("session").count("waiting_on_a_person") == once + 2)
+    assert core.state("session") == "waiting_on_a_person" and core.pid("session") == pid
     assert states("session").count("starting") == 1
 
 
@@ -1862,16 +1864,16 @@ def test_the_readout_still_says_when_the_failure_began_after_a_repeat(make_core,
     in its state from the newest record, would call a login that failed on Monday failed since today.
     The repeat carries when the state began, and the readout reads that (#896 review)."""
     from macf.pd import health
-    from macf.pd.core import FAILED_RERECORD_S
+    from macf.pd.core import LOGIN_WAIT_RERECORD_S
     began = 1_800_000_000.0
     clock = [began]
     core = make_core([make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})], wall=lambda: clock[0])
     core.boot()
-    assert drive(core, lambda: core.state("session") == "failed")
+    assert drive(core, lambda: core.state("session") == "waiting_on_a_person")
     first = events("pd_unit_state", "session")[-1]
-    clock[0] = began + 2 * FAILED_RERECORD_S + 60          # two days on
+    clock[0] = began + 2 * LOGIN_WAIT_RERECORD_S + 60          # two days on
     assert drive(core, lambda: events("pd_unit_state", "session")[-1] is not first
-                 and "still failed" in events("pd_unit_state", "session")[-1]["reason"])
+                 and "still waiting" in events("pd_unit_state", "session")[-1]["reason"])
     repeat = events("pd_unit_state", "session")[-1]
     assert repeat["since"] == began
     row = health._unit_health("session", {"event": "pd_unit_state", "timestamp": clock[0], "data": repeat},
@@ -1882,23 +1884,23 @@ def test_the_readout_still_says_when_the_failure_began_after_a_repeat(make_core,
 def test_a_unit_that_is_running_is_not_recorded_again(make_core, script):
     """Only a failure the watch could lose is repeated: a healthy unit writes no state event
     however long it runs."""
-    from macf.pd.core import FAILED_RERECORD_S
+    from macf.pd.core import LOGIN_WAIT_RERECORD_S
     clock = [1_800_000_000.0]
     core = make_core([make_unit("worker", script, {})], wall=lambda: clock[0])
     core.boot()
     assert drive(core, lambda: core.state("worker") == "running")
     before = len(states("worker"))
-    clock[0] += 3 * FAILED_RERECORD_S
+    clock[0] += 3 * LOGIN_WAIT_RERECORD_S
     assert not drive(core, lambda: len(states("worker")) > before, timeout=0.5)
 
 
-def test_a_daemon_restart_adopts_a_session_failed_for_its_login(make_core, script):
+def test_a_daemon_restart_adopts_a_session_waiting_on_its_login(make_core, script):
     """The session is still running while it can't authenticate, so a daemon that starts then
     adopts it rather than starting a second session beside it."""
     unit = make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})
     first = make_core([unit])
     first.boot()
-    assert drive(first, lambda: first.state("session") == "failed")
+    assert drive(first, lambda: first.state("session") == "waiting_on_a_person")
     pid = first.pid("session")
     _crash(first)
 
@@ -1906,19 +1908,53 @@ def test_a_daemon_restart_adopts_a_session_failed_for_its_login(make_core, scrip
     second.boot()
     assert second.pid("session") == pid
     assert states("session").count("starting") == 1
-    assert drive(second, lambda: second.state("session") == "failed")
+    assert drive(second, lambda: second.state("session") == "waiting_on_a_person")
 
 
 
-def test_status_says_a_session_failed_for_its_login_and_why(make_core, script):
-    """A session held failed for its login is still running, so its status carries its pid and
-    what the client said: attach reaches it, and pd status names the cause (MacEff #1015)."""
+def test_status_says_a_session_waits_on_its_login_and_why(make_core, script):
+    """A session waiting on its login is still running, so its status carries its pid, the login
+    as what it waits on, and what the client said: attach reaches it, and pd status names the
+    cause (MacEff #1015)."""
     unit = make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})
     core = make_core([unit])
     core.boot()
-    assert drive(core, lambda: core.state("session") == "failed")
+    assert drive(core, lambda: core.state("session") == "waiting_on_a_person")
     status = next(s for s in core.statuses() if s.unit == "session")
     assert status.pid == core.pid("session") and status.auth_failed == LOGIN_EXPIRED
+    assert status.waiting_on == "login"
+
+def test_a_session_waiting_on_its_login_whose_beat_stops_is_failed(make_core, script):
+    """A session at a prompt blocks and beats no more, which waiting excuses (R22). A session
+    waiting on its login keeps beating, so a beat that stops then means it died, and the core says
+    so rather than calling it waiting forever (MIS-0002-R19)."""
+    core = make_core([make_unit("session", script, {"auth_failed": LOGIN_EXPIRED, "alive_for": 0.6})])
+    core.boot()
+    assert drive(core, lambda: core.state("session") == "waiting_on_a_person")
+    assert drive(core, lambda: any(e["state"] == "failed" and "liveness stale" in e["reason"]
+                                   for e in events("pd_unit_state", "session")))
+
+
+def test_a_daemon_adopts_a_login_wait_recorded_by_an_older_build(make_core, script):
+    """A build before the amendment recorded a login wait as failed, with the auth reason. A seat
+    whose wait spans the upgrade still runs that session, so the new daemon adopts it rather than
+    starting a second beside it, and its next beat records the wait in the new form."""
+    unit = make_unit("session", script, {"auth_failed": LOGIN_EXPIRED})
+    first = make_core([unit])
+    first.boot()
+    assert drive(first, lambda: first.state("session") == "waiting_on_a_person")
+    pid = first.pid("session")
+    start = events("pd_unit_state", "session")[-1]["proc_start"]
+    _crash(first)
+    append_event("pd_unit_state", {"agent": CARD, "unit": "session", "state": "failed", "pid": pid,
+                                   "proc_start": start, "reason": f"authentication failed: {LOGIN_EXPIRED}"})
+    second = make_core([unit])
+    second.boot()
+    assert second.pid("session") == pid
+    assert states("session").count("starting") == 1
+    assert drive(second, lambda: second.state("session") == "waiting_on_a_person")
+    assert events("pd_unit_state", "session")[-1]["waiting_on"] == "login"
+
 
 def test_denied_grant_notice(tmp_path, script, base, run_daemon):
     """MIS-0002-R65 (denied_grant_MUST_raise_notice): a daemon that starts reads the newest

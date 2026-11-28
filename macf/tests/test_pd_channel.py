@@ -328,8 +328,9 @@ def test_dark_channel_event():
     assert said == [EVENT_CHANNEL_DARK, EVENT_CHANNEL_BACK]
 
 
-class _Stop(Exception):
-    pass
+class _Stop(BaseException):
+    """Ends a listen_forever under test. A BaseException, as an interrupt is, because the loop
+    survives every Exception (#1156) and must still let an interrupt end it."""
 
 
 def _loop(ch, monkeypatch, delivered, held_s=0.0, rounds=7):
@@ -370,6 +371,127 @@ def test_a_working_connection_reconnects_from_the_first_delay(monkeypatch):
     ch = Channel("Resident_1a2b3c")
     assert _loop(ch, monkeypatch, delivered=1, rounds=3) == [1.0, 1.0, 1.0]
     assert _loop(ch, monkeypatch, delivered=0, held_s=60.0, rounds=3) == [1.0, 1.0, 1.0]
+
+
+def _raising_loop(ch, monkeypatch, fail, rounds=4):
+    """listen_forever where *fail* ('pump' or 'connect') raises on the first round only; return
+    how many connections were attempted and the waits. A listener that dies on the first
+    exception attempts one connection and raises it out of the loop."""
+    waits, connects = [], [0]
+
+    def connect():
+        connects[0] += 1
+        if connects[0] > rounds:
+            raise _Stop
+        if fail == "connect" and connects[0] == 1:
+            raise ValueError("a published record the daemon was rewriting")
+        return object()
+    monkeypatch.setattr(ch, "connect_once", connect)
+
+    def pump(conn):
+        if fail == "pump" and connects[0] == 1:
+            raise ConnectionResetError(104, "Connection reset by peer")
+        return 1
+    monkeypatch.setattr(ch, "pump", pump)
+    with pytest.raises(_Stop):
+        ch.listen_forever(sleep=waits.append, clock=lambda: 0.0)
+    return connects[0], waits
+
+
+@pytest.mark.parametrize("fail", ["pump", "connect"])
+def test_the_listener_survives_an_exception_and_reconnects(monkeypatch, capsys, fail):
+    """#1156: the listener is a daemon thread, so an exception it lets out ends it for good while
+    the process goes on serving MCP and the client still lists the channel. A daemon that died
+    mid-connection raised ConnectionResetError in pump, and every notice for four days went by
+    the keystroke fallback. Each failure is said on stderr and the loop backs off and reconnects."""
+    ch = Channel("Resident_1a2b3c")
+    attempts, waits = _raising_loop(ch, monkeypatch, fail)
+    assert attempts == 5                                   # four rounds, then the stop
+    assert waits[0] == 1.0 and len(waits) == 4
+    err = capsys.readouterr().err
+    assert ("ConnectionResetError" if fail == "pump" else "ValueError") in err and "reconnecting" in err
+
+
+def test_the_listener_names_a_failed_write_without_blaming_the_daemon(monkeypatch, capsys):
+    """Ira on #1159: a SessionWriteFailed reaches the listener's guard, and the line it prints there
+    names it, not a failed attempt to reach the daemon."""
+    import macf.channels.maceff_channel as mc
+    ch = Channel("Resident_1a2b3c")
+    calls = [0]
+
+    def connect():
+        calls[0] += 1
+        if calls[0] > 1:
+            raise _Stop
+        return object()
+
+    def pump(conn):
+        raise mc.SessionWriteFailed("the channel could not write a notice to its session: BrokenPipeError")
+    monkeypatch.setattr(ch, "connect_once", connect)
+    monkeypatch.setattr(ch, "pump", pump)
+    with pytest.raises(_Stop):
+        ch.listen_forever(sleep=lambda s: None, clock=lambda: 0.0)
+    err = capsys.readouterr().err
+    assert "SessionWriteFailed" in err and "daemon" not in err
+
+
+def test_a_reset_mid_pump_still_counts_what_it_delivered(sock_dir):
+    """A connection reset after some records were delivered ends that connection, not the listener,
+    and pump returns what it delivered, so a working connection still restarts the back-off."""
+    a, b = socket.socketpair()
+    ch = Channel("Resident_1a2b3c", out=io.StringIO())
+    rec = {"source": "amail", "arrival_id": "a1", "count": 1, "read_at": 1.0, "sent_at": 2.0}
+
+    class _Resetting:
+        """A connection whose reads give one record, then raise as a reset socket does."""
+        def __init__(self, sock):
+            self.sock = sock
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.sock.close()
+
+        def makefile(self, *args, **kwargs):
+            return _Lines()
+
+    class _Lines:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def __iter__(self):
+            yield json.dumps(rec) + "\n"
+            raise ConnectionResetError(104, "Connection reset by peer")
+
+    assert ch.pump(_Resetting(a)) == 1
+    assert json.loads(ch.out.getvalue().splitlines()[0])["params"]["meta"]["notice_id"] == "a1"
+    b.close()
+
+
+def test_a_failed_write_to_the_session_is_not_blamed_on_the_daemon(capsys):
+    """CTB on #1157 (#1158): pump's catch for a reset daemon also caught a write to the session that
+    failed, and said the daemon connection had failed. A failed write is the session's end, said as
+    such, and leaves pump as its own error rather than as a quiet end of one connection."""
+    import macf.channels.maceff_channel as mc
+    a, b = socket.socketpair()
+    rec = {"source": "amail", "arrival_id": "a1", "count": 1, "read_at": 1.0, "sent_at": 2.0}
+    b.sendall((json.dumps(rec) + "\n").encode())
+    b.close()
+
+    class _Closed:
+        def write(self, text):
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def flush(self):
+            pass
+    ch = Channel("Resident_1a2b3c", out=_Closed())
+    with pytest.raises(mc.SessionWriteFailed, match="session"):
+        ch.pump(a)
+    assert "daemon connection failed" not in capsys.readouterr().err
 
 
 

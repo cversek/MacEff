@@ -85,12 +85,20 @@ TOO_NARROW = "too_narrow"
 #: interleave the box's lines past reading (#800); widths between have not been measured, so
 #: below this a missing box is reported as the pane's width rather than as a dialog.
 MIN_READABLE_WIDTH = 80
+#: No input box found on a pane wide enough to read (#1156). It holds like a dialog, failing
+#: closed, but says what was seen: a screen with no box is not a dialog. Text written over the
+#: client's display (a system broadcast, every five minutes) left it unreadable for a day, and a
+#: hold reported as a dialog sent the operator looking for one to clear.
+NO_BOX = "no_box"
+#: The pane couldn't be captured at all (#1158): its tmux server or pane may be gone. It holds, failing
+#: closed, under its own name: it isn't a dialog, and it isn't a screen with no box either.
+UNCAPTURED = "uncaptured"
 #: The hold reason while the refractory window runs: the agent's pace, not its screen.
 REFRACTORY = "refractory"
 
-#: The holds whose screen is kept: the two a person may be behind, and the two the
-#: Oct 17 demo could not explain afterwards.
-SCREEN_KEPT_FOR = (DIALOG, DRAFT, TOO_NARROW)
+#: The holds whose screen is kept: the two a person may be behind, and the ones whose cause
+#: is read from the screen afterwards (the Oct 17 demo could not explain its holds).
+SCREEN_KEPT_FOR = (DIALOG, DRAFT, TOO_NARROW, NO_BOX)
 #: Saved screens kept per agent, the newest; older ones are removed as new ones are written.
 SCREENS_KEPT = 20
 
@@ -196,25 +204,56 @@ def _visible(line: str) -> str:
     return "".join(out)
 
 
-#: _box's state for a screen with no input box found at all, which classify reports as a dialog,
+#: _box's state for a screen with no input box found at all, which classify reports as NO_BOX,
 #: or by the pane's width when that is too narrow to read.
-_NO_BOX = "no_box"
+_NO_BOX = NO_BOX
+
+
+def _is_prompt(line: str) -> bool:
+    """Whether *line* opens with the input prompt; the client follows it with a no-break space."""
+    return line.lstrip(" \u00a0").startswith(("❯", ">"))
+
+
+@dataclass(frozen=True, kw_only=True)
+class _Box:
+    """Where the input box sits on a screen: its rules' line numbers and its non-blank rows."""
+    top: int
+    bottom: int
+    rows: list
+
+
+def _locate_box(plain: list, rules: list) -> Optional[_Box]:
+    """The input box's place (its two rules and its rows), or None. The box is the LAST prompt line that
+    has a rule above and a rule below it, found afresh on every screen: the background-task
+    panel the client draws under the box (and its rules) moves the box's distance from the
+    bottom as tasks come and go, and prompt lines in the conversation above are never later."""
+    for i in range(len(plain) - 1, -1, -1):
+        if not _is_prompt(plain[i]):
+            continue
+        above = [r for r in rules if r < i]
+        under = [r for r in rules if r > i]
+        if not above or not under:
+            continue
+        top, bottom = above[-1], under[0]
+        if any(plain[j].strip() for j in range(top + 1, i)):
+            continue                                       # text between the rule and the prompt
+        return _Box(top=top, bottom=bottom, rows=[j for j in range(top + 1, bottom) if plain[j].strip()])
+    return None
 
 
 def _box(screen: str):
     """``(state, text)``: None and the box's text (empty for an empty box) for an idle
     session; RUNNING and the box's text while a turn runs; DIALOG and None for a box with a
-    dialog below it; _NO_BOX and None when no box is found."""
+    dialog below it, or a dialog drawn in the box's place; _NO_BOX and None when no box and no
+    dialog is found."""
     raw = screen.splitlines()
     plain = [_ANSI.sub("", line) for line in raw]
     rules = [i for i, line in enumerate(plain)
              if _RULE.match(line) and line.count("─") >= _RULE_MIN]
-    if len(rules) < 2:
-        return _NO_BOX, None                               # no input box on screen
-    top, bottom = rules[-2], rules[-1]
-    box = [i for i in range(top + 1, bottom) if plain[i].strip()]
-    if not box or not plain[box[0]].lstrip().startswith(("❯", ">")):
-        return _NO_BOX, None
+    found = _locate_box(plain, rules)
+    if found is None:
+        return _without_box(plain), None                   # no input box on screen: a dialog in its place, or none
+    top, bottom, box = found.top, found.bottom, found.rows
     below = [line for line in plain[bottom + 1:] if line.strip()]
     if len(below) > 8 or any(m in line.lower() for line in below for m in _DIALOG_MARKERS):
         return DIALOG, None
@@ -228,6 +267,23 @@ def _box(screen: str):
     if any(_RUNNING_MARKER in line.lower() or _SPINNER.search(line) for line in near):
         return RUNNING, text
     return None, text
+
+
+#: How many of a screen's last non-blank lines are searched for a dialog that replaced the box.
+DIALOG_WITHOUT_BOX_LOOKBACK = 25
+
+
+def _without_box(plain: list) -> str:
+    """DIALOG for a screen whose input box a dialog replaced (a permission prompt draws in its
+    place), recognized by the markers looked for below a box or by a numbered selection; NO_BOX
+    for any other screen with no box (#1156). Both hold, and neither is ever typed into."""
+    tail = [line for line in plain if line.strip()][-DIALOG_WITHOUT_BOX_LOOKBACK:]
+    if any(m in line.lower() for line in tail for m in _DIALOG_MARKERS):
+        return DIALOG
+    first = next((i for i, line in enumerate(tail) if _OPTION_FIRST.match(line)), None)
+    if first is not None and any(_OPTION_NEXT.match(line) for line in tail[first + 1:]):
+        return DIALOG
+    return _NO_BOX
 
 
 def _above(plain: list, top: int) -> list:
@@ -262,10 +318,11 @@ def switch_dialog_model(screen: str) -> Optional[str]:
 def classify(screen: str, width: Optional[int] = None) -> str:
     """What a captured screen shows, failing closed: anything not recognized as an idle
     session with an empty input box is one of the busy states. *width* is the pane's, when
-    known: a screen with no box on a pane under MIN_READABLE_WIDTH is TOO_NARROW, not DIALOG."""
+    known: a screen with no box on a pane under MIN_READABLE_WIDTH is TOO_NARROW, and on a wider
+    or unknown pane NO_BOX; DIALOG is kept for a dialog actually recognized around the box."""
     state, text = _box(screen)
     if state == _NO_BOX:
-        return TOO_NARROW if width is not None and width < MIN_READABLE_WIDTH else DIALOG
+        return TOO_NARROW if width is not None and width < MIN_READABLE_WIDTH else NO_BOX
     if state is not None:
         return state
     if not text:
@@ -469,7 +526,7 @@ class Waker:
                 return self._hold("the transcript's last turn has not ended" if ended is False
                                   else "the transcript can't be read", fresh)
         screen, width = self.pane.capture(), self.pane.width()
-        state = classify(screen, width) if screen is not None else DIALOG
+        state = classify(screen, width) if screen is not None else UNCAPTURED
         if state != IDLE_EMPTY:
             if self.held != state:                         # once per busy stretch
                 self.held = state
@@ -520,7 +577,7 @@ class Waker:
 
     def _evidence(self, screen: Optional[str], state: str) -> dict:
         """What a hold can show for itself: the saved screen's path for a dialog or a draft,
-        or that no screen could be read at all, which also reads as a dialog."""
+        or that no screen could be read at all, which holds as UNCAPTURED (#1158)."""
         if screen is None:
             return {"captured": False}
         if state not in SCREEN_KEPT_FOR or self.screens_dir is None:
@@ -536,7 +593,7 @@ class Waker:
         """Press Enter only while the wake is still in the box, at most three times; then
         look for the turn's start until the deadline, and say whether it came."""
         screen = self.pane.capture()
-        state = classify(screen, self.pane.width()) if screen is not None else DIALOG
+        state = classify(screen, self.pane.width()) if screen is not None else UNCAPTURED
         if state == RUNNING:
             self.verify_by = None
             self._say(EVENT_TURN, {"started": True})
