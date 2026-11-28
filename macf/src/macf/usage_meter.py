@@ -19,6 +19,19 @@ Counting rules:
   id. The tail call's growth after the first scan is not recounted: a small, one-sided
   undercount, preferred to a double count.
 - Only complete lines are consumed. A trailing partial line is left for the next scan.
+- A call is counted once across all the files of a session. A forked subagent's transcript
+  opens with a copy of the parent's last call, id and usage included, so the same id can sit
+  in the main transcript and a subagent file. Each event records the ids it counted (``ids``).
+  A tick scans and records the main transcript first; a subagent file skips any id counted by
+  an event of the same session in the last ``DEDUP_HORIZON_S``, or by a file scanned before it
+  in the tick. The original is written to the main transcript before the fork's file
+  exists, and the copy seconds later, so the copy is always the one met second and an hour is
+  ample. The session's ids are read only on a tick that scans a subagent file.
+
+Time of a call: an event records the first and last call times it counted (``first_ts``,
+``last_ts``). A reader that asks what fell inside a window prorates the event's tokens and
+calls evenly across that span (``fraction_in``) instead of crediting all of it to one moment:
+an event can gather tens of minutes of calls when ticks are sparse.
 
 Cause of an interval (``operator``, ``channel``, ``peer``, ``cron``, ``notice``, ``gate``,
 ``subagent``) comes from ``classify_prompt`` at prompt time and ``current_cause`` at meter
@@ -42,9 +55,11 @@ FAULT_EVENT = "usage_meter_fault"
 CHECKED_EVENT = "usage_meter_checked"
 TOOL_EVENT = "tool_call_completed"
 FAULT_REPEAT_S = 3600.0
+DEDUP_HORIZON_S = 3600.0
 MAIN_CHECK_EVERY_S = 600.0
 
-#: Weights relative to one uncached input token, and the fitted points per weighted token.
+#: Weights relative to one uncached input token, and the fitted points per weighted token (a token of
+#: ``REFERENCE_MODEL``; other models are scaled to it by ``MODEL_PRICE_FACTORS``).
 RATE_LABEL = "provisional (fitted 2026-11-22)"
 POINTS_PER_WEIGHTED_TOKEN = 4.08e-8
 WEIGHTS = {
@@ -55,6 +70,49 @@ WEIGHTS = {
     "output_tokens": 5.0,
 }
 TOKEN_KINDS = tuple(WEIGHTS)
+
+#: The model whose tokens the rate is denominated in: a calibrated rate is points per weighted token of this
+#: model, and every other model's tokens are scaled to it by ``MODEL_PRICE_FACTORS`` first.
+REFERENCE_MODEL = "claude-opus-5-5"
+#: Each model's price per token of each kind relative to ``REFERENCE_MODEL``'s price for the same kind, so a
+#: token weighs ``WEIGHTS[kind] * MODEL_PRICE_FACTORS[model][kind]`` reference-model input tokens. ``WEIGHTS``
+#: (and the fitted cache-read weight) stay the reference model's own relative weights. One factor per model
+#: is not enough: the list prices cache reads at a different fraction of input per model (0.05 for Opus 5.5
+#: and Sonnet 5.5, 0.025 for Fable 5.2 and 5.1), and reads are most of an agent's tokens, so a single
+#: input/output ratio would weigh a Fable read twice an Opus read though both cost $0.20 per million.
+#:
+#: Source: the model table and model notes of the claude-api skill (models cached 2026-11-03; its
+#: shared/models.md and shared/prompt-caching.md), Anthropic's first-party API prices in dollars per million
+#: tokens. Input / output / cache read as listed:
+#:   Opus 5.5    4.00 / 20.00 / 0.20       Sonnet 5.5  2.00 / 10.00 / 0.10
+#:   Fable 5.2   8.00 / 40.00 / 0.20       Fable 5.1  10.00 / 50.00 / 0.25
+#:   Haiku 5.5   0.10 /  0.50 / not listed
+#: Cache writes are not listed per model except Fable 5.2 (5m 10.00, 1h 16.00); the list states them as
+#: 1.25x input for the 5-minute TTL and 2x input for the 1-hour TTL, so every model's write factors equal
+#: its input factor. Haiku 5.5's cache read price is not listed; it is derived from the list's general rule
+#: that cache reads cost 0.1x input, 0.01 dollars, so its read factor is 0.01 / 0.20 = 0.05 (derived, not
+#: listed). The Haiku 5.5 factors assume prompts under its long-prompt tier: beyond 100K-token prompts the
+#: list charges five times as much, which this table cannot express.
+#: Update this table when the price list changes or a model is added; keys are model id prefixes and the
+#: longest matching prefix wins. Without these factors one rate would stand for every model and the
+#: envelope's minimum would pick the window leaning most on the cheapest tokens (#1176).
+def _factors(input_: float, read: float, output: float) -> Dict[str, float]:
+    """Per-kind factors: both cache writes follow input (1.25x and 2x input on every model)."""
+    return {"input_tokens": input_, "cache_write_1h_tokens": input_, "cache_write_5m_tokens": input_,
+            "cache_read_input_tokens": read, "output_tokens": output}
+
+
+MODEL_PRICE_FACTORS = {
+    "claude-opus-5-5": _factors(1.0, 1.0, 1.0),        # 4 / 0.20 / 20
+    "claude-sonnet-5-5": _factors(0.5, 0.5, 0.5),      # 2 / 0.10 / 10
+    "claude-haiku-5-5": _factors(0.025, 0.05, 0.025),  # 0.10 / 0.01 derived / 0.50, short prompts only
+    "claude-fable-5-2": _factors(2.0, 1.0, 2.0),       # 8 / 0.20 / 40
+    "claude-fable-5-1": _factors(2.5, 1.25, 2.5),      # 10 / 0.25 / 50
+}
+#: A model missing from the table weighs as the reference model in every kind, and is reported
+#: (``model_factors``).
+UNPRICED_FACTOR = 1.0
+_UNPRICED_REPORTED: set = set()  # models already reported on stderr by this process
 
 CAUSES = ("operator", "channel", "peer", "cron", "notice", "gate", "subagent")
 
@@ -106,6 +164,7 @@ class ScanResult:
     first_ts: Optional[str] = None
     last_ts: Optional[str] = None
     tail_id: Optional[str] = None
+    ids: tuple = ()  # the message ids counted, for the cross-file check
 
 
 def _blank() -> Dict[str, int]:
@@ -130,10 +189,11 @@ def _usage_row(usage: dict) -> Dict[str, int]:
     }
 
 
-def scan(path, offset: int = 0, skip_id: Optional[str] = None) -> ScanResult:
+def scan(path, offset: int = 0, skip_id: Optional[str] = None, exclude: frozenset = frozenset()) -> ScanResult:
     """Total the API calls in the transcript at ``path`` from byte ``offset``.
 
     ``skip_id`` is the previous scan's ``tail_id``: lines for that call are not counted again.
+    ``exclude`` holds ids already counted from another file of the session; they are skipped too.
     """
     path = Path(path)
     size = path.stat().st_size
@@ -162,7 +222,7 @@ def scan(path, offset: int = 0, skip_id: Optional[str] = None) -> ScanResult:
         if entry.get("type") != "assistant" or not isinstance(msg, dict) or not isinstance(msg.get("usage"), dict):
             continue
         mid = msg.get("id") or f"line@{pos}"
-        if mid == skip_id:
+        if mid == skip_id or mid in exclude:
             continue
         if mid not in calls:
             order.append(mid)
@@ -178,7 +238,8 @@ def scan(path, offset: int = 0, skip_id: Optional[str] = None) -> ScanResult:
     stamps = [calls[m]["ts"] for m in order if calls[m]["ts"]]
     return ScanResult(by_model=by_model, calls=len(order), new_offset=offset + end,
                       first_ts=min(stamps) if stamps else None, last_ts=max(stamps) if stamps else None,
-                      tail_id=order[-1] if order else skip_id)
+                      tail_id=order[-1] if order else skip_id,
+                      ids=tuple(m for m in order if not m.startswith("line@")))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -413,7 +474,19 @@ def _emit(session_id: str, path: str, point: "_Resume", res: ScanResult, cause: 
         "session_id": session_id, "path": path, "offset": point.offset, "new_offset": res.new_offset,
         "first_ts": res.first_ts, "last_ts": res.last_ts, "by_model": res.by_model,
         "calls": res.calls, "cause": cause, "tail_id": res.tail_id, "metering_since": since,
+        "ids": list(res.ids),
     })
+
+
+def _counted_ids(session_id: str, now: float) -> set:
+    """The message ids counted by this session's events of the last ``DEDUP_HORIZON_S``."""
+    from macf.agent_events_log import read_events
+    out: set = set()
+    for ev in read_events(reverse=True, scope="all", only=EVENT, since=now - DEDUP_HORIZON_S):
+        d = ev.get("data") or {}
+        if d.get("session_id") == session_id:
+            out.update(d.get("ids") or ())
+    return out
 
 
 def meter_tick(session_id: str, transcript_path: str, now: Optional[float] = None) -> Optional[dict]:
@@ -446,6 +519,7 @@ def meter_tick(session_id: str, transcript_path: str, now: Optional[float] = Non
     events = calls = 0
     skipped: Optional[Dict[str, int]] = None
     skipped_now: Dict[str, int] = {}
+    counted: Optional[set] = None  # ids counted in this session lately, read at the first subagent scan
     main_point = resume.get(str(main))
     since = (main_point.metering_since if main_point else None) or time.time()
     for path in sorted(lookup.lost):
@@ -474,7 +548,11 @@ def meter_tick(session_id: str, transcript_path: str, now: Optional[float] = Non
                 events += 1
                 continue
             point = point or _Resume()
-            res = scan(path, point.offset, point.tail_id)
+            if counted is None and fixed_cause:  # main was scanned and recorded first: the copy is here
+                counted = _counted_ids(session_id, now)
+            res = scan(path, point.offset, point.tail_id, frozenset(counted or ()))
+            if counted is not None:
+                counted.update(res.ids)
         except OSError as e:
             print(f"⚠️ MACF: usage meter: cannot read {path}: {e}; skipped this tick", file=sys.stderr)
             continue
@@ -506,37 +584,123 @@ def weighted(row: Dict[str, int], cache_read_weight: Optional[float] = None) -> 
     return sum(w[k] * row.get(k, 0) for k in TOKEN_KINDS)
 
 
+def _price_factors(model: str) -> Optional[Dict[str, float]]:
+    """The table's per-kind factors for ``model`` by longest matching prefix, or None when it has none."""
+    best = max((p for p in MODEL_PRICE_FACTORS if str(model).startswith(p)), key=len, default=None)
+    return None if best is None else MODEL_PRICE_FACTORS[best]
+
+
+def is_priced(model: str) -> bool:
+    return _price_factors(model) is not None
+
+
+def model_factors(model: str) -> Dict[str, float]:
+    """``model``'s price per token kind relative to ``REFERENCE_MODEL``'s same kind. A model the table lacks
+    weighs ``UNPRICED_FACTOR`` in every kind and is named on stderr, once per process; ``budget me`` names
+    it too."""
+    f = _price_factors(model)
+    if f is not None:
+        return f
+    if model not in _UNPRICED_REPORTED:
+        _UNPRICED_REPORTED.add(model)
+        print(f"⚠️ MACF: usage meter: no price factor for model {model!r}; weighing it as {REFERENCE_MODEL} "
+              f"({UNPRICED_FACTOR:g}). Add it to usage_meter.MODEL_PRICE_FACTORS", file=sys.stderr)
+    return {k: UNPRICED_FACTOR for k in TOKEN_KINDS}
+
+
+def priced_kinds(row: Dict[str, int], model: str, cache_read_weight: Optional[float] = None) -> Dict[str, float]:
+    """``row``'s tokens of each kind in weighted ``REFERENCE_MODEL`` input tokens: each kind's count times the
+    reference model's weight for that kind times the model's factor for that kind. A row with no tokens
+    needs no factors and reports nothing."""
+    if not weighted(row, cache_read_weight):
+        return {k: 0.0 for k in TOKEN_KINDS}
+    w = dict(WEIGHTS)
+    if cache_read_weight is not None:
+        w["cache_read_input_tokens"] = cache_read_weight
+    f = model_factors(model)
+    return {k: w[k] * f[k] * row.get(k, 0) for k in TOKEN_KINDS}
+
+
+def priced(row: Dict[str, int], model: str, cache_read_weight: Optional[float] = None) -> float:
+    """``row``'s weighted tokens in ``REFERENCE_MODEL`` tokens, each kind priced by the model's factor for
+    that kind. Everything that turns tokens into points uses this; ``weighted`` alone is kind-only, for the
+    tick fit, which fits a ratio per model itself."""
+    return sum(priced_kinds(row, model, cache_read_weight).values())
+
+
+def priced_models(by_model: Dict[str, Dict[str, int]], cache_read_weight: Optional[float] = None) -> float:
+    """The sum of ``priced`` over an event's ``by_model`` rows."""
+    return sum(priced(row, model, cache_read_weight) for model, row in (by_model or {}).items())
+
+
+def _stamp(value) -> Optional[float]:
+    """An ISO time as epoch seconds, or None when absent or unreadable."""
+    from datetime import datetime
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError as e:
+        print(f"⚠️ MACF: usage meter: unreadable call time {value!r} ({e})", file=sys.stderr)
+        return None
+
+
+def event_span(ev: dict) -> tuple:
+    """``(first, last)``: the times of the first and last call an event counted. Without ``last_ts``
+    both are the event's own time; without ``first_ts`` the span is the single moment ``last``."""
+    d = ev.get("data") or {}
+    last = _stamp(d.get("last_ts"))
+    if last is None:
+        last = float(ev.get("timestamp", 0))
+    first = _stamp(d.get("first_ts"))
+    return (first if first is not None and first <= last else last), last
+
+
+def fraction_in(ev: dict, lo: float, hi: float = float("inf")) -> float:
+    """The share of an event's calls that fell in ``[lo, hi)``, its span taken as evenly filled."""
+    first, last = event_span(ev)
+    if last <= first:
+        return 1.0 if lo <= last < hi else 0.0
+    return max(0.0, min(last, hi) - max(first, lo)) / (last - first)
+
+
 @dataclass
 class Summary:
-    tokens: Dict[str, int] = field(default_factory=lambda: {k: 0 for k in TOKEN_KINDS})
-    by_model: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    tokens: Dict[str, float] = field(default_factory=lambda: {k: 0 for k in TOKEN_KINDS})
+    by_model: Dict[str, Dict[str, float]] = field(default_factory=dict)
     by_cause: Dict[str, float] = field(default_factory=dict)
     low_by_cause: Dict[str, float] = field(default_factory=dict)
-    calls: int = 0
+    calls: float = 0
 
 
-def summarize(since: float) -> Summary:
-    """Sum the ``usage_metered`` events at or after the epoch time ``since``."""
+def summarize(since: float, cache_read_weight: Optional[float] = None) -> Summary:
+    """Sum the ``usage_metered`` events' calls from the epoch time ``since`` on, an event that began
+    before it prorated (``fraction_in``). ``by_cause`` is weighted with ``cache_read_weight`` (the
+    calibration's, when given; else the price list's). An event is never older than its last call, so the
+    read stops at ``since``."""
     from macf.agent_events_log import read_events
     s = Summary()
     for ev in read_events(reverse=True, scope="all", only=EVENT, since=since):
+        f = fraction_in(ev, since)
+        if f <= 0:
+            continue
         d = ev.get("data") or {}
         cause = d.get("cause") or "operator"
         for model, row in (d.get("by_model") or {}).items():
             m = s.by_model.setdefault(model, _blank())
             for k in (*TOKEN_KINDS, "calls"):
-                m[k] += row.get(k, 0)
+                m[k] += f * row.get(k, 0)
                 if k in s.tokens:
-                    s.tokens[k] += row.get(k, 0)
-            s.calls += row.get("calls", 0)
-            s.by_cause[cause] = s.by_cause.get(cause, 0.0) + weighted(row)
-            s.low_by_cause[cause] = s.low_by_cause.get(cause, 0.0) + weighted(row, 0.0)
+                    s.tokens[k] += f * row.get(k, 0)
+            s.calls += f * row.get("calls", 0)
+            s.by_cause[cause] = s.by_cause.get(cause, 0.0) + f * priced(row, model, cache_read_weight)
+            s.low_by_cause[cause] = s.low_by_cause.get(cause, 0.0) + f * priced(row, model, 0.0)
     return s
 
 
 def format_summary(s: Summary, label: str) -> str:
     """The view, kept to about 60 columns."""
-    def n(x): return f"{int(x):,}"
+    def n(x): return f"{round(x):,}"
     def short(x):
         x = float(x)
         return f"{x/1e6:.2f}M" if x >= 1e6 else f"{x/1e3:.1f}k" if x >= 1e3 else f"{x:.0f}"
@@ -547,9 +711,12 @@ def format_summary(s: Summary, label: str) -> str:
     low_w = sum(s.low_by_cause.values())
     lines = [f"usage, last {label}: {n(s.calls)} calls", "", "tokens"]
     lines += [f"  {names[k]:<15}{n(s.tokens[k]):>14}" for k in TOKEN_KINDS]
-    lines += ["", "by model (calls, weighted)"]
-    for model, row in sorted(s.by_model.items(), key=lambda kv: -weighted(kv[1])):
-        lines.append(f"  {model[:30]:<30}{n(row['calls']):>7}{short(weighted(row)):>9}")
+    lines += ["", f"by model (calls, weighted as {REFERENCE_MODEL})"]
+    for model, row in sorted(s.by_model.items(), key=lambda kv: -priced(kv[1], kv[0])):
+        lines.append(f"  {model[:30]:<30}{n(row['calls']):>7}{short(priced(row, model)):>9}")
+    unpriced = sorted(m for m, row in s.by_model.items() if weighted(row) and not is_priced(m))
+    if unpriced:
+        lines.append(f"  no price factor, weighed {UNPRICED_FACTOR:g}: {', '.join(unpriced)}")
     lines += ["", "by cause (weighted)"]
     for cause, w in sorted(s.by_cause.items(), key=lambda kv: -kv[1]):
         lines.append(f"  {cause:<15}{short(w):>10}{(100 * w / total_w if total_w else 0):>6.1f}%")

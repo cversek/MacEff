@@ -228,15 +228,14 @@ def test_the_snapshot_counts_only_this_weeks_metered_points():
     assert snap["agent_points"] == pytest.approx(40_000 * P, rel=1e-6)
 
 
-def test_hour_rate_uses_only_a_fit_from_the_last_hour():
+def test_current_rate_is_the_newest_calibration_however_old():
     now = time.time()
-    fit = {"rate": 1e-6, "low": 5e-7, "high": 2e-6, "hours": 20, "r2": 0.9}
-    _write([{"timestamp": now - 2 * HOUR, "event": "usage_rate_fitted", "data": fit}])
-    old = budget_digest.hour_rate(now)
-    assert not old.fitted and old.value == P
-    _write([{"timestamp": now - 1800, "event": "usage_rate_fitted", "data": fit}])
-    fresh = budget_digest.hour_rate(now)
-    assert fresh.fitted and fresh.value == 1e-6
+    assert not budget_digest.current_rate(now).calibrated
+    cal = {"rate": 1e-6, "read_weight": 0.1, "method": "lower_envelope", "at": now - 9 * 86400}
+    _write([{"timestamp": now - 9 * 86400, "event": "usage_rate_calibrated", "data": cal},
+            {"timestamp": now - 8 * 86400, "event": "usage_rate_calibrated", "data": {**cal, "rate": 2e-6}}])
+    rate = budget_digest.current_rate(now)
+    assert rate.calibrated and rate.value == 2e-6 and rate.read_weight == 0.1
 
 
 def test_the_digest_names_exactly_the_top_three_causes():
@@ -370,12 +369,3 @@ def test_an_unknown_counter_at_either_end_gives_no_account_delta():
     budget_digest.sprint_ended("9", now)  # a reading at the end only
     assert _events(budget_digest.END_EVENT)[1]["data"]["account_points_delta"] is None
 
-
-def test_a_recorded_no_fit_attempt_is_quiet_and_leaves_the_provisional_rate(capsys):
-    now = time.time()
-    _write([{"timestamp": now - 300, "event": "usage_rate_fitted",
-             "data": {"rate": None, "reason": "too few hours", "window_h": 48}}, _metered(now - 200)])
-    rate = budget_digest.hour_rate(now)
-    assert not rate.fitted and rate.value == P
-    assert budget_digest.digest(now)
-    assert capsys.readouterr().err == ""

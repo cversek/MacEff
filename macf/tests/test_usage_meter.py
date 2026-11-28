@@ -362,12 +362,12 @@ def test_summary_text_totals_and_window():
     small = {"input_tokens": 100, "cache_write_1h_tokens": 0, "cache_write_5m_tokens": 400,
              "cache_read_input_tokens": 1000, "output_tokens": 50, "calls": 3}
     now = time.time()
-    _emit_at(now - 2 * 86400, um.EVENT, {"path": "p", "cause": "cron", "by_model": {"big-model": big}})
-    _emit_at(now - 60, um.EVENT, {"path": "p", "cause": "gate", "by_model": {"big-model": big}})
+    _emit_at(now - 2 * 86400, um.EVENT, {"path": "p", "cause": "cron", "by_model": {"claude-opus-5-5": big}})
+    _emit_at(now - 60, um.EVENT, {"path": "p", "cause": "gate", "by_model": {"claude-opus-5-5": big}})
     _emit_at(now - 30, um.EVENT, {"path": "q", "by_model": {"tiny": small}})  # no cause: operator
     s = um.summarize(now - 3600)
     assert s.calls == 123 and s.tokens["cache_read_input_tokens"] == 40_001_000 and s.tokens["input_tokens"] == 2_000_100
-    assert set(s.by_cause) == {"gate", "operator"} and s.by_model["big-model"]["calls"] == 120
+    assert set(s.by_cause) == {"gate", "operator"} and s.by_model["claude-opus-5-5"]["calls"] == 120
     expected = (
         'usage, last 1h: 123 calls\n'
         '\n'
@@ -378,9 +378,10 @@ def test_summary_text_totals_and_window():
         '  cache read         40,001,000\n'
         '  output                300,050\n'
         '\n'
-        'by model (calls, weighted)\n'
-        '  big-model                         120    8.50M\n'
+        'by model (calls, weighted as claude-opus-5-5)\n'
+        '  claude-opus-5-5                   120    8.50M\n'
         '  tiny                                3      950\n'
+        '  no price factor, weighed 1: tiny\n'
         '\n'
         'by cause (weighted)\n'
         '  gate                8.50M 100.0%\n'
@@ -552,3 +553,21 @@ def test_skipped_event_is_written_once_across_ticks(tmp_path):
         um.meter_tick("sid", str(t))
         _write(t, _line(f"m{i + 1}"))
     assert len(list(read_events(reverse=False, scope="all", only=um.SKIPPED_EVENT))) == 1
+
+
+def test_a_call_copied_into_a_fork_file_counts_once(tmp_path):
+    """A fork's transcript opens with the parent's last call, same id: the session counts it once,
+    whether the original was metered in an earlier tick or in the same one."""
+    t = tmp_path / "s.jsonl"
+    _write(t, _line("a"))
+    um.meter_tick("sid", str(t))  # baseline
+    _write(t, _line("p", output_tokens=7))
+    um.meter_tick("sid", str(t))  # the parent's call, metered on its own
+    sub = tmp_path / "sid" / "subagents"
+    sub.mkdir(parents=True)
+    _write(sub / "f1.jsonl", _line("p", output_tokens=7, ts="2099-01-01T00:00:00Z"), _line("f1"))
+    _write(t, _line("q"))
+    _write(sub / "f2.jsonl", _line("q", ts="2099-01-01T00:00:00Z"), _line("f2"))
+    assert um.meter_tick("sid", str(t)) == {"events": 3, "calls": 3}  # q in main, f1 and f2 in the forks
+    counted = [m for e in _metered() for m in e.get("ids") or ()]
+    assert sorted(counted) == ["f1", "f2", "p", "q"]

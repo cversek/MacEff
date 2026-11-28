@@ -45,6 +45,8 @@ intends for them. This policy says where the numbers come from, what may be kept
 - When do the hooks sample on their own, and when do they never touch a credential?
 - What happens when a refresh fails, and how long do the hooks wait before asking again?
 - What does the weekly field show when its refresh is failing, or its week has reset since the sample?
+- What does `me 0.9%/1h` after the weekly field mean, and why does what other agents do not move it?
+- How is the rate behind it calibrated, and what does a `!` before it ask for?
 
 **4 Intent: conserve, normal, burn**
 - What does each mode promise?
@@ -136,6 +138,71 @@ pace. A sample over an hour old says so: `wk 38% (2.4%/hr, 3h old)`. When the re
 the field says why and what to run: `wk 38% (57h old: endpoint 429; budget sample --manual)`. Once the sample's week
 has reset, its percentage and rate describe a window that is over, so the field shows neither:
 `wk reset since the last sample (3h old)`.
+
+**The own share** follows the weekly field once the agent's usage meter has counted calls: `· me 0.9%/1h`, the
+points this agent spent over the last hour. The window is written out because it is not the weekly field's: that
+rate is smoothed over two hours, this is a plain one-hour sum, so the two disagree during a burst and neither is
+wrong. Points are this agent's own metered tokens times a **frozen calibration**: a rate in points per weighted
+token, recorded once as a `usage_rate_calibrated` event and read from there by the hook line, `budget me` and the
+digest. Nothing on the hook or Stop path recomputes it from the current hours, so other agents on the same account
+working in the same hours cannot move this agent's figure. A rate refitted each hour against the account's counter
+could not tell this agent's use from theirs, and read their activity as this agent's cost (#1176).
+
+`budget calibrate` computes the rate as a lower envelope. The counter's change over a window is this agent's points
+plus everyone else's, and everyone else's is never negative, so each window gives an upper bound on the rate: the
+counter's change plus one (its whole-percent step) over this agent's weighted tokens in it. The calibration is the
+smallest of those bounds over every window of one to twelve whole hours in the last fourteen days that has a
+counter reading at both ends, no weekly reset inside and this agent active in it. Other agents' use can only raise a
+window's bound, never lower it, so a busy hour of theirs loosens that window and is simply not the one chosen.
+Alongside the whole hours it also tries **step windows**, which run at the samples' own times from a step-up (the
+first reading of a new value) to the sample just before a later step-up, one to twelve hours apart. Every reading `v`
+means the true counter is at least `v` and below `v + 1`, so the bound has the same form; but at these ends the
+counter has only just passed its start reading and is just short of its end reading plus one, so the added one is
+nearly all real movement rather than rounding. No allowance for movement inside a sample gap is assumed, because none
+is needed: the bound holds however the account moved between two samples. The calibration is the smallest bound over
+both sets, so the step windows can only tighten it. Any fall of the counter between a window's two ends breaks it,
+whether or not the samples name a reset time, so a stale low reading or an unmarked weekly reset never ends a window
+below its start. As a second line of defence a bound at or below zero is refused and named in the output, never
+chosen: it is never a measurement, and with no positive bound there is no calibration and the command says why.
+The command prints the rate, the kind of window that set it (`hour` or `step`, also recorded in the event), its span
+and how many windows were considered, and beside it the tightest window that does not overlap the chosen one, with
+its rate and how many times the chosen rate it is (recorded as `runner_up`). The minimum goes to whichever window had
+this agent's tokens most over-counted, so a runner-up far above the chosen rate says the chosen window may be one
+window's measurement error. **A rate more than four times the provisional constant, or less than a quarter of it,
+is refused and not recorded**, and the command exits 1 saying why: so far from the price list it is more likely a
+meter fault than a measurement. Look at the window it names and the runner-up before anything else; there is no
+override, and the provisional rate or the previous calibration stays in force. `--dry-run` prints without
+recording, and says when a real run would be refused.
+Cache reads weigh a tenth of fresh input, a constant chosen by an earlier fit that agreed with the price list.
+**Each model's tokens are weighed by its price relative to the main model** before they count anywhere: in the
+calibration's windows, the hook line, `budget me`, the digest and the sprint records. The account's points follow
+the price list, and the models differ there several-fold, so one rate for every model would let the minimum pick
+the window whose tokens were cheapest, the one leaning most on a less expensive model, and then price main-model
+hours at that rate: `me` would read low in the hours that cost most, by an amount the band of four does not catch.
+The factors are the list-price ratios to `claude-opus-5-5`, **one per model and per token kind** (input, the two
+cache writes, cache reads, output), each against the main model's price for the same kind, kept in a small table in
+the usage meter keyed by model id prefix. One factor per model would not do: the list prices cache reads at a
+different fraction of input per model, so Fable 5.2 costs twice the main model for input and output but the same
+for a cache read, and reads are most of the tokens (Sonnet 5.5 is a half in every kind; Haiku 5.5 a fortieth, and a
+twentieth for reads, its read price derived from the list's tenth-of-input rule since the list gives none). The Haiku 5.5 factors assume
+prompts under its long-prompt price tier, beyond which the list charges five times as much. The calibrated rate is
+therefore points per `claude-opus-5-5` token, and the calibration event records the factors it used. A model missing from the table
+weighs as the main model and is never passed over silently: it is named once on stderr and in `budget me`, and the
+remedy is to add its ratio to the table when the price list changes or a model arrives.
+The rate is an upper bound, and it tightens as the agent works through hours in which the account barely moves. **So
+`me` is an upper bound on this agent's points, not an estimate**: it errs high by construction, and the figures of
+several seats on one account added together come to more than the account moved. `budget me` says so on its own
+line; the hook line keeps the bare figure. Until
+the first calibration the provisional constant stands in, marked `~`. `part` marks an hour not fully metered.
+
+The account's movement is kept only as a sanity check. When this agent's points over a window come to more than the
+account moved plus one, the figure is shown as it is, not capped, and marked `!`, as in `me !3.6%/1h`. What
+`budget me` says depends on the calibration's age. Within six hours of calibrating the rate cannot have gone stale:
+it says the calibrated bound is loose for this hour, an upper bound that recalibrating after heavy hours tightens.
+After six hours it says the calibration looks stale and names `budget calibrate`. `budget me` shows the share over any
+window and puts the rest of the account's movement down to other agents and unmetered use. Calls are placed at their
+own times: an event that gathered calls across a window's edge counts only the part inside, and a call copied into a
+forked subagent's transcript is counted once.
 
 The hooks refresh the sample themselves at most every ten minutes (`MACEFF_BUDGET_AUTOSAMPLE_MIN`) with a short
 timeout, and **only for an agent that has sampled in the last week**: an installation that never asked for its budget
