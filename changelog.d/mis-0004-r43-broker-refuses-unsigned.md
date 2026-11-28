@@ -1,0 +1,3 @@
+### Changed
+
+- **The broker refuses a declared agent's unsigned mail** (`amail/broker.py`, policy `amail` §3.2.2 and §3.2.3, MIS-0004 R43). At submission the broker applies the receiver's own verdict (`attest.sender_verdict`, R44) at its acceptance time. A message from an agent the operator's registry declares is refused when it is unsigned, or when it verifies against no key valid then. The refusal comes back with the verdict's reason, goes into the audit, and gives the message a `denied` fate. An agent the registry doesn't declare isn't refused, so enforcement follows each declaration. While the registry can't be trusted nothing is refused, and the broker warns of it. Three tests that expected such mail to arrive suspect now expect its refusal.

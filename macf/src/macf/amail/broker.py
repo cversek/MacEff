@@ -1652,9 +1652,10 @@ class Broker:
         message.trust = None
 
         # PASSED — `signature` is the sender's own claim about its own message
-        # and is carried unchanged. It is PASSED rather than CHECKED on purpose:
-        # the broker cannot verify an outbound signature (it holds no private
-        # key, by design) and the recipient is the party who must. Its size is
+        # and is carried unchanged here. canonicalize() doesn't judge it: submit()
+        # does, against the operator's registry (R43), and the recipient judges
+        # it again at ingest (R44). Verifying needs only public keys, so holding
+        # no private key (by design) doesn't stop the broker checking. Its size is
         # bounded because an unbounded "signature" is an unbounded channel
         # wearing a cryptographic name — the same defect round 3 found in the
         # identifier fields.
@@ -1723,6 +1724,21 @@ class Broker:
                 self.audit.refused(sender=sender, recipients=[], reason=reason,
                                    message_id=message.message_id)
             return {"ok": False, "refused": [reason], "message_id": message.message_id}
+
+        # AN AGENT THE REGISTRY DECLARES SIGNS, OR ITS MAIL DOESN'T LEAVE (MIS-0004 R43). The
+        # broker holds no private key, but verifying needs only the public keys, which are the
+        # operator's registry. It applies the receiver's own rule (attest.sender_verdict, R44) at
+        # this acceptance, so a key rotated out is refused on new mail (R45) and the two sides
+        # never disagree on the same bytes. A sender the registry doesn't declare, and every
+        # sender while the registry can't be trusted, passes as unverified, the receiver's
+        # reading too: the landing declares first and enforces second (section 12.4).
+        unsigned = self._signature_refusal(message)
+        if unsigned is not None:
+            if self.audit:
+                self.audit.refused(sender=sender, recipients=message.to,
+                                   reason=unsigned, message_id=message.message_id)
+            self._record_fate(sender, message, "denied", unsigned)
+            return {"ok": False, "refused": [unsigned], "message_id": message.message_id}
 
         refusals = self._check(sender, message.to)
         if refusals:
@@ -1893,6 +1909,21 @@ class Broker:
                 edited.append("to")
         message.to = to
         return edited
+
+    def _signature_refusal(self, message: Message) -> Optional[str]:
+        """Why this submission is refused under R43, or None. Refused only when the registry
+        declares the sender's card and the message is unsigned or verifies against none of the
+        keys valid now; the reason is the verdict's own words."""
+        from .attest import sender_verdict
+        verdict = sender_verdict(message, self.sender_card(message), self.registry, _accepted_now())
+        if verdict.get("keys_declared") is None and "can't be trusted" in str(verdict.get("reason")):
+            # Not a refusal (see submit), but never silent: an untrusted registry means no agent
+            # is held to its keys until the operator repairs it.
+            print(f"⚠️ MACF: amail broker: {verdict['reason']}; signatures aren't enforced (R43)",
+                  file=sys.stderr)
+        if verdict.get("trust") != TrustClass.SUSPECT.value:
+            return None
+        return f"signature required (MIS-0004 R43): {verdict['reason']}"
 
     def sender_card(self, message: Message) -> Optional[str]:
         """The sender's calling card, resolved once here and written into the hand-off sidecar, so
