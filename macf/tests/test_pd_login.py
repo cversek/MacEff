@@ -185,6 +185,10 @@ def test_a_renewed_login_starts_its_steps_again():
     events, notices = _warning_check([48, 700, 70], ends_seq=[old, new, new])
     assert [d["step"] for e, d in events if e == login.EVENT_WARNED] == [1, 1]
     assert len(notices) == 2
+    # Each grant's warning has its own arrival id: a renewed grant's first step must not reuse the
+    # old grant's, or a reader keyed on the id takes the new warning for one already delivered
+    # (Ira's review of #1162).
+    assert notices[0][1] != notices[1][1]
 
 
 def test_a_restart_reads_back_the_warning_already_given():
