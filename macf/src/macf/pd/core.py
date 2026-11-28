@@ -38,6 +38,7 @@ from macf.agent_events_log import append_event, get_log_path, read_events
 from macf.notify.session import proc_start, proc_start_key, verify_incarnation
 from macf.pd.interface import (
     AUTH_FAILED_REASON,
+    LOGIN_WAIT,
     EVENT_CONTROL,
     EVENT_OVER_LIMIT,
     EVENT_UNDER_LIMIT,
@@ -326,10 +327,10 @@ EXIT_NOT_SEEN = -1000
 
 #: Unit states with a process behind them, which a restarted daemon may adopt.
 LIVE_STATES = ("starting", "running", "waiting_on_a_person")
-#: How often a unit that is still failed, and still beating, has its failed state recorded again.
-#: The outside watch reads state within a 7-day lookback and liveness more often, so a failure
+#: How often a session still waiting on its login, and still beating, has that state recorded again.
+#: The outside watch reads state within a 7-day lookback and liveness more often, so a login wait
 #: recorded once and then rotated away, or older than the lookback, would read healthy (#896).
-FAILED_RERECORD_S = 24 * 3600.0
+LOGIN_WAIT_RERECORD_S = 24 * 3600.0
 
 #: How often the core reads what an adopted session waits on, which no beat carries (R21).
 DIALOG_POLL_S = 5.0
@@ -771,6 +772,8 @@ class Core:
         return [UnitStatus(unit=r.spec.name, state=r.state, pid=r.pid if r.proc else None,
                            proc_start=r.proc_start if r.proc else None, since=r.since,
                            restart_held_until=self._restart_held_until(r),
+                           waiting_on=LOGIN_WAIT if r.proc and r.auth_failed is not None
+                           and r.state == "waiting_on_a_person" else None,
                            auth_failed=r.auth_failed if r.proc else None)
                 for r in self._units.values()]
 
@@ -916,8 +919,10 @@ class Core:
         self._previously_live = {n for n, d in last.items() if d.get("state") in LIVE_STATES}
         for name, data in last.items():
             pid, start = data.get("pid"), data.get("proc_start")
-            # A session that can't authenticate reads failed but is still running, waiting for
-            # a person to log in (MIS-0002-R19), so it is adopted like a live one.
+            # A session waiting on its login is live and adopted as any waiting unit is (R19).
+            # A build before that amendment recorded the same session as failed with this
+            # reason; a seat whose wait spans the upgrade still runs it, so it is adopted too,
+            # and its next beat records the wait in the new form.
             held = data.get("state") == "failed" and str(data.get("reason", "")).startswith(AUTH_FAILED_REASON)
             if (data.get("state") not in LIVE_STATES and not held) or not pid or not start:
                 continue
@@ -1189,29 +1194,31 @@ class Core:
                           f"restart policy {r.spec.restart} after failure {r.failures}")
             self._spawn(r)
 
-    def _rerecord_failed(self, r: _Runner) -> None:
-        """Say again, once a day, that a unit still running is failed for its login (#896).
+    def _rerecord_login_wait(self, r: _Runner) -> None:
+        """Say again, once a day, that a session still running waits on its login (#896).
 
         State events are rare and liveness events frequent: a unit that runs steadily writes no
-        state event, so the one that says it failed can be rotated into an archive, or be older
-        than the outside watch's lookback, while the process keeps beating. The watch would then
-        read it healthy. The repeat keeps the newest failed record inside the lookback for as long
-        as the failure lasts. It is the same state and the same process, so nothing changes for any
-        reader but the one that was missing it; the reason says how long it has lasted."""
+        state event, so the one that says it waits on its login can be rotated into an archive, or
+        be older than the outside watch's lookback, while the process keeps beating. The watch
+        would then read it healthy. The repeat keeps the newest record inside the lookback for as
+        long as the wait lasts. It is the same state and the same process, so nothing changes for
+        any reader but the one that was missing it; ``since`` says how long it has lasted."""
         now = self._wall()
-        if now - max(r.since, r.rerecorded_at) < FAILED_RERECORD_S:
+        if now - max(r.since, r.rerecorded_at) < LOGIN_WAIT_RERECORD_S:
             return
         r.rerecorded_at = now
         began = datetime.fromtimestamp(r.since).astimezone().strftime("%Y-%m-%d %H:%M %Z")
         self._emit(EVENT_STATE, UnitState(
-            agent=self.card, unit=r.spec.name, state="failed", pid=r.pid, proc_start=r.proc_start,
-            reason=f"{AUTH_FAILED_REASON}: {r.auth_failed} (still failed; first recorded {began})",
+            agent=self.card, unit=r.spec.name, state="waiting_on_a_person", pid=r.pid,
+            proc_start=r.proc_start, waiting_on=LOGIN_WAIT,
+            reason=f"{AUTH_FAILED_REASON}: {r.auth_failed} (still waiting; first recorded {began})",
             boot_id=self._boot_id, since=r.since,
         ).model_dump())
 
     def _check_liveness(self, r: _Runner, now: float) -> None:
-        if r.state == "waiting_on_a_person":
-            # Silence while a person is awaited is not death, and waiting is never a
+        login_wait = r.state == "waiting_on_a_person" and r.auth_failed is not None
+        if r.state == "waiting_on_a_person" and not login_wait:
+            # Silence while a person answers a prompt is not death, and waiting is never a
             # reason to restart (MIS-0002-R22 (layer_MUST-NOT_restart_waiting_unit)).
             return
         if r.state == "starting":
@@ -1219,11 +1226,11 @@ class Core:
             if now - r.started_at > bound:
                 self._fail(r, f"no liveness from pid {r.pid} within {bound:g} s of its start")
             return
-        held = r.state == "failed" and r.auth_failed is not None
-        if held:
-            self._rerecord_failed(r)
-        if (r.state == "running" or held) and r.alive_at is not None:
-            # A session failed for its login still beats; if the beat stops too, it has died.
+        if login_wait:
+            self._rerecord_login_wait(r)
+        if (r.state == "running" or login_wait) and r.alive_at is not None:
+            # A session waiting on its login still beats, unlike one at a prompt, whose client
+            # blocks; so if its beat stops too, it has died, and waiting doesn't excuse that.
             interval = r.alive_interval_s or r.spec.liveness_interval_s
             bound = LIVENESS_TOLERANCE * interval
             age = now - r.alive_at
@@ -1276,12 +1283,15 @@ class Core:
         r.in_flight = live.in_flight
         if live.auth_failed:
             # The harness can't authenticate. The session is running but can't work, and that
-            # must never read as idle (MIS-0002-R19 (auth_failure_MUST_read_failed)). It is not
-            # stopped or restarted: a restart can't log in, and a restarted session that is
-            # never prompted makes no request, so it would read healthy again while it can't.
-            if r.auth_failed is None or r.state != "failed":
+            # must never read as idle or healthy: it waits on a person to log in, named as data,
+            # and is kept running so that a person can attach and log in
+            # (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_login)). It is not restarted: a
+            # restart can't log in (R22), and a restarted session that is never prompted makes
+            # no request, so it would read healthy again while it can't.
+            if r.auth_failed is None or r.state != "waiting_on_a_person":
                 r.auth_failed = live.auth_failed
-                self._transition(r, "failed", f"{AUTH_FAILED_REASON}: {live.auth_failed}")
+                self._transition(r, "waiting_on_a_person", f"{AUTH_FAILED_REASON}: {live.auth_failed}",
+                                 waiting_on=LOGIN_WAIT)
             return
         if r.auth_failed is not None:
             r.auth_failed = None
@@ -1293,11 +1303,12 @@ class Core:
             self._transition(r, "running", "first liveness from this incarnation")
 
     def session_waiting_on(self) -> Optional[str]:
-        """What the session unit waits on a person for, or None (MIS-0002-R21): the keystroke
-        fallback's first evidence that a prompt is idle (MIS-0004 R29)."""
+        """What the session unit waits on a person for, or None (MIS-0002-R21). The keystroke
+        fallback holds while it is anything (MIS-0004 R29), so no notice is ever typed into a
+        login flow while the session waits on its login (MIS-0002-R19)."""
         for r in self._units.values():
             if r.spec.kind == "session" and r.state == "waiting_on_a_person":
-                return "a person"
+                return "its login" if r.auth_failed is not None else "a person"
         return None
 
     def session_transcript(self, claude_home: Optional[Path] = None) -> Optional[Path]:
@@ -1845,7 +1856,7 @@ class Core:
         ``pd_unit_failed`` notice, whose id carries the failures in a row. The notifier owes only
         the newest per unit, so a crash loop while the session is down comes back as one notice
         with the count. Restarting is left to the policy, as before; the notice only says.
-        A session failed for its login is not counted here: it is still running, and a notice
+        A session waiting on its login never comes here: it is still running, and a notice
         would open a turn that can't authenticate (MIS-0002-R19)."""
         r.failures += 1
         self._transition(r, "failed", reason)
@@ -1949,12 +1960,14 @@ class Core:
                 return  # exited and not yet reaped: macOS refuses to signal a group of zombies
             print(f"⚠️ MACF: pd: cannot signal {r.spec.name} (pid {r.pid}): {e}", file=sys.stderr)
 
-    def _transition(self, r: _Runner, state: State, reason: str) -> None:
+    def _transition(self, r: _Runner, state: State, reason: str,
+                    waiting_on: Optional[str] = None) -> None:
         r.state = state
         r.since = self._wall()
         self._emit(EVENT_STATE, UnitState(
             agent=self.card, unit=r.spec.name, state=state,
             pid=r.pid, proc_start=r.proc_start, reason=reason, boot_id=self._boot_id,
+            waiting_on=waiting_on,
         ).model_dump())
 
     def _control(self, act: str, r: _Runner, asked_by: Asker, reason: str,

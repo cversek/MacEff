@@ -137,22 +137,33 @@ def test_another_accounts_server_beside_ours_is_passed_over(tmp_path, monkeypatc
     assert plan.kind != TMUX
 
 
-def _held_for_login(tmp_path, auth_failed):
+def _held_for_login(tmp_path, auth_failed, state=None, waiting_on="login"):
     from macf.utils.attach import plan_attach
     (tmp_path / "Resident_1a2b3c.tmux").mkdir()
-    unit = {"unit": "seat", "state": "failed", "pid": 500, "proc_start": "x"}
+    unit = {"unit": "seat", "state": state or ("waiting_on_a_person" if auth_failed else "failed"),
+            "pid": 500, "proc_start": "x"}
     if auth_failed:
         unit["auth_failed"] = auth_failed
+        if waiting_on:
+            unit["waiting_on"] = waiting_on
     return plan_attach({"ok": True, "units": [unit]}, "seat", **_probes(),
                        tmux_tmpdir=str(tmp_path / "Resident_1a2b3c.tmux"))
 
 
-def test_a_session_held_failed_for_its_login_is_attachable_to_log_in(tmp_path):
-    """MIS-0002-R19 keeps a session that can't log in running, so a person can run /login in it
-    (persistent_layer 3.2's alert: attach and run /login). Attach must reach it (MacEff #1015)."""
+def test_a_session_waiting_on_its_login_is_attachable_to_log_in(tmp_path):
+    """MIS-0002-R19 (auth_failure_MUST_read_waiting_on_login) keeps a session that can't log in
+    running, so a person can run /login in it (persistent_layer 3.2's alert: attach and run
+    /login). Attach must reach it and say why (MacEff #1015)."""
     plan = _held_for_login(tmp_path, "Login expired")
     assert plan.kind == TMUX
     assert "/login" in plan.reason and "Login expired" in plan.reason
+
+
+def test_the_login_is_read_from_waiting_on_not_from_the_words(tmp_path):
+    """A status that carries what the client said, but no login wait, is not a login wait: the
+    attach keys on the field (Ira on #1161, point 1)."""
+    plan = _held_for_login(tmp_path, "Login expired", state="failed", waiting_on=None)
+    assert plan.kind == NONE and "/login" not in plan.reason
 
 
 def test_a_session_failed_for_another_reason_is_still_not_attached(tmp_path):

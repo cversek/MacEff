@@ -90,6 +90,24 @@ def read_assessment(now: Optional[float] = None,
     return assess(raw, now, expiring_s=expiring_s)
 
 
+def credential_fingerprint(reader: Optional[Callable[[], str]] = None) -> Optional[tuple]:
+    """The stored credential's two expiry dates, the refresh grant's and the access token's, as a
+    pair that changes when anyone logs in again on this account; None when there is no credential
+    to read or it states neither. Only those two fields are read, as in ``assess``: no token leaves
+    the read. A session waiting on its login compares this with the pair it saw when it failed, so
+    one ``/login`` returns every session sharing the credential to running, not only the one it was
+    typed in (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_login))."""
+    from macf.budget import BudgetError, read_credential
+    try:
+        raw = (reader or read_credential)()
+    except BudgetError:
+        return None  # noqa: MACEFF003 - no credential reachable is a state, not a fault: no dates to compare, so the wait stands
+    # A credential that isn't the client's JSON raises: the caller warns and leaves the wait as it is.
+    oauth = json.loads(raw).get("claudeAiOauth") or {}
+    pair = (_seconds(oauth.get("refreshTokenExpiresAt")), _seconds(oauth.get("expiresAt")))
+    return None if pair == (None, None) else pair
+
+
 def warn_seconds(declaration) -> float:
     """The login warning window in seconds: the declaration's ``reports.warn_days``, else the default. One
     reading at every site that judges a login's expiry, so none of them can ignore the declaration (#1027)."""

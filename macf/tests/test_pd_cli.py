@@ -215,8 +215,8 @@ def test_a_unit_that_cant_log_in_names_a_missing_user_as_the_probable_cause(tmp_
     monkeypatch.setattr("macf.pd.daemon.card_for_home", lambda home: CARD)
     monkeypatch.setattr("macf.utils.paths.find_agent_home", lambda: tmp_path)
     report = types.SimpleNamespace(source="daemon", why="ok", daemon_build="x", cli_build="x", schedules=[], runs=None,
-                                   units=[{"unit": "session", "state": "failed", "pid": 9, "since": 1.0,
-                                           "auth_failed": "Login expired"}])
+                                   units=[{"unit": "session", "state": "waiting_on_a_person", "pid": 9, "since": 1.0,
+                                           "waiting_on": "login", "auth_failed": "Login expired"}])
     monkeypatch.setattr("macf.pd.client.status", lambda home, card: report)
     for name in ("_say_drafts", "_say_allowlist", "_say_receipts", "_say_tray"):
         monkeypatch.setattr(cli, name, lambda *a, **k: None)

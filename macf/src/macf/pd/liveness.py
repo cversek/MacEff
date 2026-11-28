@@ -91,7 +91,7 @@ class Heartbeat:
         self._in_flight = in_flight or (lambda: None)
         self._waiting_on = waiting_on or (lambda: None)
         # auth_failed: what the harness said when it could not authenticate, asked on each beat
-        # (MIS-0002-R19 (auth_failure_MUST_read_failed)).
+        # (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_login)).
         self._auth_failed = auth_failed or (lambda: None)
         self._append = append
         self._stop = threading.Event()
