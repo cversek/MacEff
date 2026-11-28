@@ -253,3 +253,77 @@ def test_one_copy_per_recipient(local):
     sm, ss = os.stat(m), os.stat(s)
     assert (sm.st_dev, sm.st_ino) != (ss.st_dev, ss.st_ino)
     assert sm.st_nlink == 1 and ss.st_nlink == 1
+
+
+# ---------------------------------------------------------------- R10, R11, R16
+
+def _tree(root):
+    return {str(p.relative_to(root)): p.stat().st_mtime_ns for p in root.rglob("*") if p.is_file()}
+
+
+def test_next_holder_pulls(local):
+    """R10 (handoff_MUST_be_taken_by_its_recipient), broker to agent: the broker writes only
+    under its own hand-off root, and the recipient's own ingest takes the message into its store.
+    Between systems the receiver's listener takes custody, which R56's test covers. The shared
+    hand-off rung writes into the peer broker's intake instead (#1168), so R10's row stays planned
+    until that rung is settled."""
+    home = local.config.agent_homes["sparrow"]
+    before = _tree(home)
+    r = local.submit("ira", _msg(f"ira@{HOST}", f"sparrow@{HOST}"))
+    assert r["ok"], r
+    assert _tree(home) == before, "the broker wrote nothing in the recipient's tree"
+    [pair] = _box_pairs(local, "sparrow")
+    assert pair.parent.parent == local.config.inbound_handoff, "the copy waits in the broker's own box"
+    [got] = _ingest(local, "sparrow")
+    assert got["ingested"] is True
+    assert [m.message_id for m in store.read_all(home)] == [r["message_id"]]
+    assert _box_pairs(local, "sparrow") == [], "the recipient took it, and its copy left the box"
+
+
+def test_copy_kept_until_next_holder_completes(local, monkeypatch):
+    """R11 (holder_MUST_keep_copy_until_next_completes): the box copy is removed only after the
+    recipient's own store holds the message. A store write that fails leaves the copy where it
+    was, and the next pass delivers it once."""
+    r = local.submit("ira", _msg(f"ira@{HOST}", f"sparrow@{HOST}"))
+    assert r["ok"], r
+    [pair] = _box_pairs(local, "sparrow")
+    real_deliver = store.deliver
+
+    def full_disk(home, message):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(store, "deliver", full_disk)
+    with pytest.raises(OSError):
+        _ingest(local, "sparrow")
+    assert _box_pairs(local, "sparrow") == [pair], "the next holder did not complete, so the copy stays"
+    assert store.read_all(local.config.agent_homes["sparrow"]) == []
+
+    monkeypatch.setattr(store, "deliver", real_deliver)
+    [got] = _ingest(local, "sparrow")
+    assert got["ingested"] is True
+    assert [m.message_id for m in store.read_all(local.config.agent_homes["sparrow"])] == [r["message_id"]]
+    assert _box_pairs(local, "sparrow") == []
+
+
+def test_duplicate_dropped(local):
+    """R16 (receiver_MUST_drop_duplicate_ids): a second copy of an id the store already holds,
+    as a repeated hand-off leaves it, is dropped and the drop is recorded beside the held one."""
+    r = local.submit("ira", _msg(f"ira@{HOST}", f"sparrow@{HOST}"))
+    assert r["ok"], r
+    [pair] = _box_pairs(local, "sparrow")
+    payload, sidecar = pair.read_bytes(), pair.with_suffix(".json").read_text()
+    _ingest(local, "sparrow")
+
+    box = local.config.inbound_handoff / "sparrow"
+    again = box / ("9" + pair.stem)
+    again.with_suffix(".json").write_text(sidecar)
+    again.with_suffix(".amsg").write_bytes(payload)
+    [got] = _ingest(local, "sparrow")
+    assert got["ingested"] is False and got.get("duplicate") is True
+    home = local.config.agent_homes["sparrow"]
+    assert [m.message_id for m in store.read_all(home)] == [r["message_id"]], "one copy is held"
+    assert _box_pairs(local, "sparrow") == [], "the duplicate copy is gone from the box"
+    [held_sidecar] = [p for p in store.bundle_sidecars_for(home).glob("*.json")
+                      if json.loads(p.read_text()).get("message_id") == r["message_id"]]
+    dropped = json.loads(held_sidecar.read_text()).get("duplicates_dropped", [])
+    assert [d["entry"] for d in dropped] == [again.with_suffix(".amsg").name], "the drop is recorded"
