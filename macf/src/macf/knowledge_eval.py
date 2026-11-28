@@ -257,17 +257,19 @@ def citation_labels(corpus: Corpus) -> Tuple[Dict[str, Set[str]], int]:
 def same_subject_labels(corpus: Corpus, index_text: Optional[str]) -> Tuple[Dict[str, Set[str]], int]:
     if not index_text:
         return {}, 0
+    # A cluster is what the learnings CLI reads as one, so the two never disagree: structural headings
+    # such as a CEP navigation guide are not clusters, a heading's "(N)" count is optional, and an entry
+    # line names its own file (#1165, review).
+    from macf.learnings_index import parse_index
     by_file = {Path(v["path"]).name: k for k, v in corpus.nodes.items() if v["type"] == "learnings"}
     clusters: Dict[str, Set[str]] = defaultdict(set)
-    current, unresolved = None, 0
-    for line in index_text.splitlines():
-        if line.startswith("## "):
-            current = line[3:].strip()
-            continue
-        for fn in _LEARNING_FILE.findall(line):
-            if current and fn in by_file:
-                clusters[current].add(by_file[fn])
-            elif current:
+    unresolved = 0
+    for name, info in parse_index(index_text).items():
+        for fn in info["files"]:
+            fn = Path(fn).name
+            if fn in by_file:
+                clusters[name].add(by_file[fn])
+            else:
                 unresolved += 1
     rel: Dict[str, Set[str]] = defaultdict(set)
     for members in clusters.values():

@@ -36,7 +36,7 @@ def _snapshot(cross_refs=True):
         "type": "reflections", "class": "temporal_record", "title": "a reflection",
         "path": "/home/a/agent/private/reflections/2026-02-01_JOTEWR_x.md", "concepts": ["shared"],
         "text": '[LEARNING 2026-01-02 "topic 01"]', "in_web": True, "linked": True}
-    index = "## Cluster A\n" + "\n".join(f"- {_learning(i)}" for i in range(0, N, 4))
+    index = "## Cluster A\n" + "\n".join(f"- `{_learning(i)}`" for i in range(0, N, 4))   # as the learnings CLI writes
     return {"taken_at": "2026-02-02T00:00:00+0000", "nodes": nodes, "learnings_index": index}
 
 
@@ -103,6 +103,24 @@ def test_learnings_named_without_the_suffix_still_get_labels():
     assert unresolved == 1, "only the name that matches no node is unresolved, not the observation"
     same, _ = ke.same_subject_labels(corpus, snap["learnings_index"])
     assert len(same) == N // 4
+
+
+def test_same_subject_clusters_are_the_ones_the_learnings_cli_reads():
+    """A structural heading such as a CEP navigation guide is a reading list, not a cluster, and counted as
+    one it added hundreds of spurious pairs (Ira's review of #1166). A cluster heading counts with or without
+    the "(N)" the CLI writes."""
+    snap = _snapshot()
+    a = [_learning(i) for i in range(0, N, 4)]
+    b = [_learning(i) for i in range(1, N, 4)]
+    snap["learnings_index"] = ("## CEP Navigation Guide\n" + "\n".join(f"- `{f}`" for f in a + b) + "\n"
+                               "## Cluster A\n" + "\n".join(f"- `{f}` - when a" for f in a) + "\n"
+                               f"## Cluster B ({len(b)})\n" + "\n".join(f"- `{f}` - when b" for f in b) + "\n")
+    corpus = ke.Corpus(snap, "d" * 64)
+    same, unresolved = ke.same_subject_labels(corpus, snap["learnings_index"])
+    key = lambda f: f"learnings:{f[:-3]}"
+    assert same[key(a[0])] == {key(f) for f in a[1:]}, "the navigation guide joined a to b"
+    assert same[key(b[0])] == {key(f) for f in b[1:]}, "a cluster heading with a count was not read"
+    assert unresolved == 0
 
 
 def test_the_split_is_stable_and_a_query_keeps_its_side_as_the_corpus_grows():
