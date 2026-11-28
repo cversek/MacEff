@@ -17,3 +17,12 @@ Run, in order:
 5. `python e8_blind.py`: shuffled fire and control excerpts for the blind hazard reading (definitions in `e8_hazards.tsv`); the key is written apart.
 
 Two things to edit for another seat: `e8_registry.tsv` names this seat's memory files, so each seat writes its own registry, frozen and hashed before replay; and the consult patterns at the top of `e0_extract.py` assume the MacEff agent tree.
+
+## Round 2, R2-B on this record
+
+Round 2's ms-marco check (MacEff #1149, rule 7231398098) ran on this record with the container-management maintainer's kit, unchanged, from `experiments/mis0006_round2/container_management/msmarco/` on `kit/mis0006-r1-container-management`, not from this folder. This record never ran `knowledge eval` in round 1, so the seal used `R1_SNAPSHOT=none`, and every labeled query counted as fresh. It also needed:
+- `MACEFF_AGENT_HOME_DIR` set to the agent's home, or the harness reads another home's learnings;
+- `PYTHONPATH` pointing at a checkout of main's `macf/src` with #1166 merged, since earlier `knowledge_eval` labels only learnings named `*_learning.md`;
+- `R2_DEVICE=cpu`.
+
+Order: `seal`, post its hash, then `run`, then `cost`. On macOS, read `cost`'s `resident_added_mb` as bytes divided by 1024 (about 1,024 times too high): `ru_maxrss` is in bytes there. Run `cost` on a quiet machine, since its latency measures whatever else is running.
