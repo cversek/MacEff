@@ -2,12 +2,12 @@
 
 **Number**: 0010
 **Type**: Amendment
-**Status**: Draft
+**Status**: Accepted
 **Authors**: the repo owner, who asked for the change on issue #1161; drafted by the container-management maintainer
 **Secretary**: the Secretary of deliberation #493
 **Created**: 2026-11-27
 **Amends**: MIS-0002: R19 (auth_failure_MUST_read_failed, now auth_failure_MUST_read_waiting_on_person); adds R205 (auth_wait_MUST_alert_at_once), R206 (layer_MUST-NOT_type_into_auth_wait) and R207 (login_wait_MUST_end_when_credential_renewed)
-**Resolution**: pending: the sign-offs of MIS-0002's other two maintainers (section 3), then the repo owner's merge. The number is provisional, the next one no open pull request holds, for the repo owner to confirm.
+**Resolution**: Accepted by the repo owner's merge of pull request #1163 on 2026-11-28, which also confirms the number. Both of MIS-0002's other maintainers signed off before the merge, the head maintainer and the host-side maintainer, as MIS-0001-R57 (amendment_MUST_have_maintainer_signoff) requires (section 3). No objection was recorded.
 
 ---
 
