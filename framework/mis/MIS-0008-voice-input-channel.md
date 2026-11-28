@@ -2,10 +2,10 @@
 
 **Number**: 0008
 **Type**: Standards
-**Status**: Draft
+**Status**: Deliberation
 **Authors**: the container-management maintainer
-**Secretary**: none
-**Deliberation**: pending
+**Secretary**: the head maintainer
+**Deliberation**: https://github.com/cversek/MacEff/issues/1175
 **Created**: 2026-11-13
 **Updates**: MIS-0002, MIS-0007
 **Supersedes**: none
@@ -161,12 +161,19 @@ It concerns every agent that will take dictation or speak, every deployment that
 
 - **R58** [MUST · decidable: macf/tests/test_voice_capture.py::test_listening_off_releases_the_transcription_model_and_listening_on_keeps_it] When listening is turned off, a capture unit MUST release its transcription model from memory, and load it again only for the next transcription. (transcription_model_MUST_be_released_while_listening_is_off)
 
+- **R76** [MUST · decidable: macf/tests/test_voice_capture.py::test_declared_cues_play_on_open_and_before_delivery] Where its declaration names cues, a capture unit MUST play the start cue once the indicator shows and the sent cue before delivery. (declared_cues_MUST_mark_open_and_send)
+- **R80** [MUST NOT · decidable: macf/tests/test_voice_backends.py::test_a_declared_key_is_consumed_not_passed_on] A declared talk key MUST NOT reach the window that has focus. (talk_key_MUST-NOT_reach_focused_window)
+- **R81** [MAY · judgment: the operator, in each declaration] A capture unit's declaration MAY name slot keys, each selecting which agent the talk keys reach and announcing that agent's name aloud and on the indicator. (slot_keys_MAY_select_talk_target)
+
 - **R60** [MUST · decidable: macf/tests/test_voice_capture.py::test_the_session_key_opens_a_locked_recording_that_only_the_send_key_ends] A session key MUST open a recording no pause ends, which the send key or a stop word ends and the session key pressed again discards. (session_key_MUST_open_a_locked_recording)
 
 - **R61** [MUST · decidable: macf/tests/test_voice_kept.py::test_kept_audio_goes_only_under_the_declared_folder_for_its_account_alone] Where kept audio is on, a capture unit MUST write each recording only under its declared local folder, readable by its own account alone. (kept_audio_MUST_stay_in_its_declared_folder)
 - **R62** [MUST · decidable: macf/tests/test_voice_kept.py::test_a_kept_recording_is_an_event_without_content] When a capture unit keeps a recording, it MUST record an event holding the recording's hash, trigger and time, and none of its content. (kept_recording_MUST_be_an_event)
 - **R63** [MUST · decidable: macf/tests/test_voice_kept.py::test_deleting_a_kept_recording_deletes_what_was_derived_from_it] When a kept recording is deleted, the system MUST delete every item it recorded as derived from that recording. (deleting_kept_audio_MUST_delete_derived_items)
 - **R64** [MUST NOT · judgment: the operator, when a training set is made] A training set MUST NOT include a kept recording of a person whose consent the operator has not recorded. (training_MUST-NOT_use_unconsented_voices)
+- **R77** [MUST · decidable: macf/tests/test_voice_transcribe.py::test_a_silent_last_stretch_transcribes_to_nothing] A full transcription MUST drop trailing silence before the model sees it. (transcription_MUST_drop_trailing_silence)
+- **R78** [MUST · decidable: macf/tests/test_voice_transcribe.py::test_a_cut_tail_is_delivered_with_a_note] When the capture unit cuts a repeated tail from a transcript, it MUST deliver the utterance with a note that a tail was cut. (cut_tail_MUST_be_noted_on_delivery)
+- **R79** [MUST · decidable: macf/tests/test_voice_kept.py::test_a_cut_tail_keeps_the_raw_transcript] Where kept audio is on, a recording whose tail was cut MUST keep its raw transcript beside the delivered one. (cut_tail_MUST_keep_raw_transcript)
 
 ### 6.5 Wake phrases
 
@@ -186,6 +193,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R31** [MUST · judgment: the operator, at each selection] Before it generates samples, a selecting agent MUST put its inferred traits to the operator and take the operator's answer. (voice_selection_MUST_ask_operator_first)
 - **R32** [MUST NOT · judgment: the operator, at each selection] An agent's voice MUST NOT be built to imitate a real person's voice. (voice_MUST-NOT_imitate_a_real_person)
 - **R33** [SHOULD · judgment: the operator, in each declaration] While the screen is locked, an agent SHOULD speak aloud only what its voice section allows. (locked_screen_speech_SHOULD_be_declared)
+- **R82** [MAY · judgment: the maintainers, at review of the voice_generation policy] An agent's voice tools MAY learn a word's pronunciation by speaking it, transcribing it back and keeping the respelling that returns the word. (pronunciation_MAY_be_learned_by_round_trip)
 
 ### 6.7 The voice lock
 
@@ -209,6 +217,15 @@ It concerns every agent that will take dictation or speak, every deployment that
 - **R48** [MUST · decidable: macf/tests/test_voice_dispatch.py::test_dispatched_utterance_signed] An utterance dispatched to a member MUST be signed over its target, an expiry and a nonce, as MIS-0007 requires of operator input. (dispatched_utterance_MUST_be_signed)
 - **R49** [MUST · decidable: macf/tests/test_voice_dispatch.py::test_member_reads_only_own_voice_subtree] A member's primal daemon MUST be able to read only its own voice subtree on its system daemon's broker. (member_MUST_read_only_its_own_voice)
 - **R50** [MUST · decidable: macf/tests/test_voice_dispatch.py::test_bad_signature_expiry_or_nonce_refused] If a dispatched utterance's signature, expiry or nonce fails its check, then the member's primal daemon MUST refuse and record it. (bad_dispatched_utterance_MUST_be_refused)
+
+### 6.10 Sound analysis of kept recordings
+
+- **R70** [MUST · decidable: macf/tests/test_voice_analysis.py::test_analysis_runs_only_on_a_kept_recording_and_is_a_derived_item] A sound analyzer MUST run only on a kept recording, and record its report as an item derived from that recording. (sound_analysis_MUST_derive_from_kept_audio)
+- **R71** [MUST · decidable: macf/tests/test_voice_analysis.py::test_the_soundscape_is_a_notice_never_a_voice_message] A recording's soundscape MUST reach a session only as a separate notice pointing at its report, never on the Voice Input Channel. (soundscape_MUST_arrive_as_its_own_notice)
+- **R72** [MUST · decidable: macf/tests/test_voice_analysis.py::test_an_absent_model_refuses_and_names_the_fetch] While a sound analyzer's model is absent, the analyzer MUST refuse to run and name the command that fetches it. (absent_analysis_model_MUST_refuse_with_fetch_command)
+- **R73** [MUST NOT · decidable: macf/tests/test_voice_analysis.py::test_nothing_fetches_a_model_unasked] The framework MUST NOT download an analysis model except at the operator's own command. (framework_MUST-NOT_fetch_analysis_models)
+- **R74** [MUST · decidable: macf/tests/test_voice_analysis.py::test_the_notice_is_off_until_declared_and_the_report_is_written_anyway] The soundscape notice MUST stay off unless the agent's voice section turns it on. (soundscape_notice_MUST_be_opt_in)
+- **R75** [MUST NOT · decidable: macf/tests/test_voice_analysis.py::test_speakers_are_not_counted_without_their_own_setting] A sound analyzer MUST NOT count a recording's speakers unless the voice section turns that on by its own setting. (speaker_count_MUST-NOT_run_without_own_opt_in)
 
 ### 6.9 Policy and skills
 
@@ -306,6 +323,20 @@ It concerns every agent that will take dictation or speak, every deployment that
 
 **Policy and skills (R51, R52).** Policy ships with the capability (`core_principles`). The operator asked that the guided procedures be policy invoked by skills. A skill that held its own rules would drift from the policy.
 
+**What the thread of 2026-11-19 and 2026-11-20 added (R70 to R82).** These come from #1008: a design note on sound analysis, written by the engineering seat with the container-management maintainer, and the operator's items from 2026-11-20, posted by the engineering seat. Each was for discussion before anything was built into the framework. Requirements state what the thread agreed, and the open parts are Q10 to Q14.
+- **R70:** the analyses read the room, so they run only where the operator already chose to keep the audio (R13), and the report goes through the derived-item record, so deleting the recording deletes it (R63). The operator asked for them on 2026-11-14: "the more audio superpowers you have, the better this can get".
+- **R71:** the head maintainer's answer on the thread: the Voice Input Channel's value is that what arrives on it is the operator's words, so a machine's guess about the room uses a notice of its own, as MIS-0002-R40 keeps a notice from passing as a person's instruction.
+- **R72, R73:** a model download is a new executable dependency on the operator's machine, so it takes the operator's own act each time, as the head maintainer answered. The refusal names the command, so the way forward is one step.
+- **R74:** a summary in context on every utterance travels into transcripts and summaries, a different exposure from a file in the kept folder, so the notice is opt-in while the report is written either way (the head maintainer's answer).
+- **R75:** a count of speakers is the sharpest privacy fact of the analyses, so it takes its own setting rather than riding with the labels (the head maintainer's answer).
+- **R76:** in a headset the operator can't see the indicator, and asked to hear a recording open and its message go. The cue plays after the indicator, so the two never disagree. Whether a discard has its own cue is Q11.
+- **R77:** Whisper primed with a vocabulary writes speech into trailing silence. On the kept clips, a filter that drops silence before the model returned every silent tail empty and kept all the speech (the existing test). The operator met four utterances that ended in a phrase repeated dozens of times on 2026-11-20.
+- **R78, R79:** what still gets through is cut, and the operator wants the failures kept, since they are data about the model: the delivered text says a tail was cut, and the kept record keeps the raw transcript. Which signals decide a tail is Q14.
+- **R80:** holding a talk key sent its repeats to the focused window, so a terminal printed the escape sequence over and over. A key the capture unit claims must not also act elsewhere. On macOS consuming it needs the Accessibility grant, which is Q12.
+- **R81:** the operator asked for agent slots on F1 to F7, each choosing which agent the talk keys reach, with the choice said aloud. It depends on R80, so a slot key doesn't leak either. It changes what R47's "the trigger" means, which is Q13.
+- **R82:** unusual words come out wrong, and a word that survives a round trip through speech and transcription is a word the agent can say. Words that depend on context (read and read) need more than a table, so it is a MAY.
+- **Not folded:** restarting a unit at once, the operator's fifth item, is its own issue (#1052). The pretrained wake detector the engineering seat runs locally is Q10, since a stock model comes with neither R24's report nor R25's disjoint test set.
+
 **Rejected**
 - **A trigger command over a socket** (`voice trigger`): any agent on the login could call it (R18).
 - **One capture unit per agent on a shared machine:** several processes would compete for one microphone, and the operator asked for one server.
@@ -341,6 +372,7 @@ It concerns every agent that will take dictation or speak, every deployment that
 
 ## 10 Security and Safety
 
+- **The speech worker is a service that acts for an agent,** so MIS-0002-R202 (data_service_MUST-NOT_listen_on_tcp), R203 (data_service_socket_MUST_sit_in_private_directory) and R204 (data_service_MUST_check_peer_account), added by MIS-0011, bind it. It listens on a Unix socket in a directory only its account can enter, and refuses a caller whose kernel-reported account is another. The prototype's loopback TCP listener moves in MIS-0011's landing. This MIS adds no listener of its own: the capture unit reaches a daemon through the daemon's socket (R04, R12), and takes no trigger over any socket (R18).
 - **Anyone in the room can speak.** Mitigations:
   - R09 keeps every utterance away from authorization.
   - R07 marks locked-screen speech.
@@ -396,6 +428,19 @@ It concerns every agent that will take dictation or speak, every deployment that
 | R67 | decidable | macf/tests/test_voice_presence.py::test_wake_only_activity_is_hands_free | planned |
 | R68 | decidable | macf/tests/test_voice_presence.py::test_keyboard_input_clears_hands_free | planned |
 | R69 | decidable | macf/tests/test_voice_presence.py::test_wake_voice_older_than_the_idle_window_is_idle_not_hands_free | planned |
+| R70 | decidable | macf/tests/test_voice_analysis.py::test_analysis_runs_only_on_a_kept_recording_and_is_a_derived_item | planned |
+| R71 | decidable | macf/tests/test_voice_analysis.py::test_the_soundscape_is_a_notice_never_a_voice_message | planned |
+| R72 | decidable | macf/tests/test_voice_analysis.py::test_an_absent_model_refuses_and_names_the_fetch | planned |
+| R73 | decidable | macf/tests/test_voice_analysis.py::test_nothing_fetches_a_model_unasked | planned |
+| R74 | decidable | macf/tests/test_voice_analysis.py::test_the_notice_is_off_until_declared_and_the_report_is_written_anyway | planned |
+| R75 | decidable | macf/tests/test_voice_analysis.py::test_speakers_are_not_counted_without_their_own_setting | planned |
+| R76 | decidable | macf/tests/test_voice_capture.py::test_declared_cues_play_on_open_and_before_delivery | planned (running in one deployment, not yet in the framework) |
+| R77 | decidable | macf/tests/test_voice_transcribe.py::test_a_silent_last_stretch_transcribes_to_nothing | passing |
+| R78 | decidable | macf/tests/test_voice_transcribe.py::test_a_cut_tail_is_delivered_with_a_note | planned |
+| R79 | decidable | macf/tests/test_voice_kept.py::test_a_cut_tail_keeps_the_raw_transcript | planned |
+| R80 | decidable | macf/tests/test_voice_backends.py::test_a_declared_key_is_consumed_not_passed_on | planned |
+| R81 | judgment | the operator, in each declaration | pending |
+| R82 | judgment | the maintainers, at review of the voice_generation policy | pending |
 | R23 | decidable | macf/tests/test_voice_wake.py::test_wake_passes_its_checks_in_order | planned (model, speech and transcription pass in order; the voice lock takes its place between them with the lock's phase) |
 | R24 | decidable | macf/tests/test_voice_wake.py::test_model_stored_with_report | passing |
 | R25 | decidable | macf/tests/test_voice_wake.py::test_test_set_disjoint_from_training | passing |
@@ -445,6 +490,7 @@ One pull request, opened as a draft with this MIS, grows with the prototype in s
 6. **The voice lock:** enrollment, annotation, the model, the notices, the lockout and the raised guard, with the voice_lock policy and its skill (R34 to R45).
 7. **One capture unit for many agents,** with the downward route (R46 to R50).
 8. **The macOS backends,** from the first port.
+9. **Sound analysis, cues and the transcript tail,** from the 2026-11-19 and 2026-11-20 thread (R70 to R79), then the key handling and slot keys once Q12 and Q13 are settled (R80, R81), and pronunciation (R82).
 
 If the pull request grows too large to review, it splits after stage 4 and after stage 6. A revision of MIS-0007 moves R59, R62 and R63 here, with the note the process requires under each.
 
@@ -459,6 +505,11 @@ If the pull request grows too large to review, it splits after stage 4 and after
 - **Q07** Is 0008 the right number? *Resolved 2026-11-13: the operator confirmed 0008.* (mis_number_confirmation)
 - **Q08** Where does a system's shared capture unit get its microphone? The MIS-0007 draft places a capture unit in the operator's login session, where the microphone grant and the audio server are, while R46 runs the shared unit on the system daemon's account, which has neither on a desktop. Either the system account is given the audio device directly, or the shared unit runs in the login session and still signs with a key out of every agent's reach. The prototype runs it on injected backends. The maintainers decide, from the first live run of the shared unit. (shared_capture_audio_source)
 - **Q09** How is an agent told what a presence state, HANDS_FREE included, asks of it? *Part resolved 2026-11-18: a hold or toggle key clears HANDS_FREE (R68). The posture itself (answer by voice, ask for nothing that needs the screen or the keyboard) the operator called the correct reasoning, and left the way agents are informed of it to a deliberation once this MIS is live, together with how agent behavioral posture is reinforced for every mode and presence state.* No requirement states the posture yet. (hands_free_agent_conduct)
+- **Q10** May a pretrained wake model, a download each operator approves per file, serve as a capture unit's detector, and what stands in for R24's test report and R25's disjoint test set when its training clips are unknown? The maintainers decide. (pretrained_wake_model_report)
+- **Q11** Should a recording that ends with nothing sent (an abort, a refusal or a failed voice lock) play a cue of its own, so a silent discard is heard? The operator decides. (discard_cue)
+- **Q12** On macOS, consuming a declared key (R80) needs the Accessibility grant beside Input Monitoring. Does the capture app take it, given what else that grant allows, or does R80 bind only where a backend can consume keys without it? The operator and the maintainers decide. (talk_key_grant_on_macos)
+- **Q13** With slot keys (R81), the talk keys' target is the last slot pressed, a state rather than the trigger itself. Does R47 stand as written, or is it revised to count the selected slot as part of the trigger? The maintainers decide. (slot_keys_and_target_rule)
+- **Q14** Which signals and thresholds decide that a transcript ends in a repeated tail (the compression ratio, word times past the end of speech), and are they reported with a test set as R24 does for a wake model? The maintainers decide. (tail_detection_thresholds)
 
 ## 14 Deliberation Record
 
@@ -478,6 +529,7 @@ None.
 - 2026-11-18: the operator's rulings by dialog: R69, HANDS_FREE lapses to USER_IDLE after the idle window; and kept audio as written, with consent gating training only.
 - 2026-11-18: at the head maintainer's re-review: R67 carries R65's condition, so it cannot conflict with R66 where the channel is not declared; HANDS_FREE gets a glossary entry, and mode_system is named as its policy home in Lands-in.
 - 2026-11-18: R28 revised from the macOS port: one playback lock per system serializes speech, with a worker per agent, since one worker per system left every agent but the first unheard on a shared login; R27 reads any speech on the system.
+- 2026-11-28: for the deliberation (#1175), main merged in, the rename of the Notification Channel kept across main's new code and tests. From the #1008 thread: the sound-analysis design with the head maintainer's three answers as R70 to R75 (section 6.10); the capture unit's cues as R76; the operator's 2026-11-20 items as R77 to R79 (the transcript tail), R80 (talk keys that leak), R81 (slot keys) and R82 (pronunciation by round trip), with Q10 to Q14 for what is still open, the pretrained wake detector among them (Q10). Restarting a unit at once stays its own issue (#1052). MIS-0011 (#1144), merged the same day, checked against the voice surfaces: the speech worker falls under MIS-0002-R202 to R204, said in section 10, and no requirement here needed a change. Status set to Deliberation, with the head maintainer as Secretary, as the repo owner convened it.
 
 ## Wiki-Links
 
