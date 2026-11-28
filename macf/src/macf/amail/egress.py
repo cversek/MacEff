@@ -59,7 +59,10 @@ def render_iptables_rules(allowed: Mapping[str, int],
     mail = ["-p", "tcp", "-m", "multiport", "--dports", port_spec]
     rules = [mail + ["-m", "owner", "--uid-owner", str(uid), "-j", "ACCEPT"]
              for _, uid in sorted(allowed.items(), key=lambda kv: kv[1])]
-    rules.append(mail + ["-j", "REJECT", "--reject-with", "icmp-port-unreachable"])
+    # Plain REJECT, with no --reject-with: the same rule goes to iptables and ip6tables, and each
+    # defaults to its own port-unreachable. icmp-port-unreachable is IPv4's alone, and ip6tables
+    # refuses it, which would stop a container's start at the IPv6 table.
+    rules.append(mail + ["-j", "REJECT"])
     return rules
 
 

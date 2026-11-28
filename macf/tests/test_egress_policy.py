@@ -500,7 +500,8 @@ def _fake_system(start_module, monkeypatch, listed_extra="", drop=None, accounts
         calls.append(cmd)
         if len(cmd) > 2 and cmd[1] == "-A":
             line = "-A " + " ".join(cmd[2:])
-            if not (drop and drop in line):
+            catch_all = "-j REJECT" in line and "--uid-owner" not in line
+            if not (drop and (drop in line or (drop == "catch-all" and catch_all))):
                 chain.setdefault(cmd[0], []).append(line)
         if len(cmd) > 1 and cmd[1] == "-S":
             return SimpleNamespace(returncode=0, stdout="\n".join(chain.get(cmd[0], [])) + listed_extra,
@@ -543,9 +544,17 @@ class TestMailAllowList:
 
     def test_a_catch_all_missing_after_install_aborts(self, start_module, monkeypatch):
         """Read back, never assumed: a chain that lost its REJECT would admit every account."""
-        _fake_system(start_module, monkeypatch, drop="icmp-port-unreachable")
+        _fake_system(start_module, monkeypatch, drop="catch-all")
         with pytest.raises(RuntimeError, match="catch-all REJECT absent"):
             start_module.apply_egress_policy(_mail_config(["amail_broker"]))
+
+    def test_every_rule_loads_in_both_address_families(self):
+        """One rendered rule goes to iptables and to ip6tables, so it may name nothing that only
+        one family accepts: ip6tables refuses IPv4's icmp-port-unreachable, and a container would
+        stop at its start step. A plain REJECT defaults to each family's own refusal."""
+        from macf.amail.egress import render_iptables_rules
+        for rule in render_iptables_rules({"amail_broker": 22998, "operator": 22000}):
+            assert not any(arg.startswith(("icmp-", "icmp6-")) or arg == "--reject-with" for arg in rule), rule
 
     def test_without_an_allow_list_start_warns_that_r33_is_unmet(self, start_module, monkeypatch):
         _fake_system(start_module, monkeypatch, listed_extra="")
