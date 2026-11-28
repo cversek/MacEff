@@ -166,7 +166,7 @@ def search_policies(query: str, limit: int = 5) -> list[ExplainedRecommendation]
 
         # Create retriever score for explanation
         retriever_score = RetrieverScore(
-            retriever="hybrid",
+            retriever=result['search_type'],
             rank=idx,
             raw_score=similarity,
             distance=r['distance'],
@@ -183,7 +183,7 @@ def search_policies(query: str, limit: int = 5) -> list[ExplainedRecommendation]
             policy_name=policy_name,
             score=r['distance'],
             confidence_tier=tier,
-            retriever_contributions={"hybrid": retriever_score},
+            retriever_contributions={result['search_type']: retriever_score},
             keywords_matched=keywords[:5],
             matched_questions=policy_questions,
         )

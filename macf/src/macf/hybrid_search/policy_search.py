@@ -27,6 +27,19 @@ except ImportError:
 from .models import MatchedQuestion
 
 
+_FALLBACK_WARNED = False
+
+
+def _warn_fallback_once(reason: str) -> None:
+    """Say once per process that hybrid search fell back to vector, and why (#1170)."""
+    global _FALLBACK_WARNED
+    if _FALLBACK_WARNED:
+        return
+    _FALLBACK_WARNED = True
+    print(f"⚠️ MACF: policy search: hybrid is unavailable, so results are vector only ({reason})",
+          file=sys.stderr)
+
+
 class PolicySearch:
     """Policy search with lazy model loading and question support."""
 
@@ -140,7 +153,11 @@ class PolicySearch:
         start = time.time()
         query_embedding = self.model.encode(query)
 
-        # Try hybrid search with FTS
+        # Try hybrid search with FTS. The call shape and the missing full-text
+        # index (#1170) mean it falls back today; turning hybrid on changes the
+        # ranking, which belongs to MIS-0006's landing. What this does now is
+        # say which mode ran, so nothing labels a vector search "hybrid".
+        fallback_reason = ""
         try:
             # LanceDB hybrid: vector + FTS reranking
             results = (
@@ -149,8 +166,9 @@ class PolicySearch:
                 .to_list()
             )
             search_type = "hybrid"
-        except (AttributeError, Exception):
-            # Fallback to semantic-only if FTS not available
+        except Exception as e:  # noqa: BLE001 - any failure falls back to vector, and is reported below, never dropped
+            fallback_reason = f"{type(e).__name__}: {e}"
+            _warn_fallback_once(fallback_reason)
             results = (
                 self.documents_table.search(query_embedding)
                 .limit(limit)
@@ -163,6 +181,7 @@ class PolicySearch:
         return {
             'query': query,
             'search_type': search_type,
+            'fallback_reason': fallback_reason,
             'results': [
                 {
                     'policy_name': r['policy_name'],
@@ -215,19 +234,31 @@ class PolicySearch:
         ]
 
     def check_fts_support(self) -> dict:
-        """
-        Check if LanceDB FTS is available and create index if needed.
+        """Whether the documents table has a full-text index, read without changing anything.
+
+        It used to create the index, so a check wrote to the live index (#1170). Creating
+        one is `ensure_fts_index`'s job.
 
         Returns:
             Dict with fts_available bool and message string
         """
         try:
-            # LanceDB 0.4+ has create_fts_index
+            fts = [i for i in self.documents_table.list_indices()
+                   if str(getattr(i, "index_type", "")).upper() == "FTS"]
+        except Exception as e:  # noqa: BLE001 - an unreadable index list is reported as the answer
+            return {'fts_available': False, 'message': f"the index list can't be read: {e}"}
+        if fts:
+            return {'fts_available': True, 'message': f"full-text index present: {fts[0].name}"}
+        return {'fts_available': False, 'message': 'no full-text index on the documents table'}
+
+    def ensure_fts_index(self) -> dict:
+        """Create the full-text index on the documents' content, replacing any. This writes."""
+        try:
             self.documents_table.create_fts_index("content", replace=True)
             return {'fts_available': True, 'message': 'FTS index created'}
         except AttributeError:
             return {'fts_available': False, 'message': 'FTS not available in this version'}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the failure is the returned answer
             return {'fts_available': False, 'message': str(e)}
 
 
@@ -279,7 +310,7 @@ if __name__ == "__main__":
 
     # Check FTS support
     print("\nChecking FTS support...")
-    fts_status = searcher.check_fts_support()
+    fts_status = searcher.ensure_fts_index()
     print(f"FTS: {fts_status}")
 
     # Run test queries
