@@ -153,15 +153,25 @@ plus everyone else's, and everyone else's is never negative, so each window give
 counter's change plus one (its whole-percent step) over this agent's weighted tokens in it. The calibration is the
 smallest of those bounds over every window of one to twelve whole hours in the last fourteen days that has a
 counter reading at both ends, no weekly reset inside and this agent active in it. Other agents' use can only raise a
-window's bound, never lower it, so a busy hour of theirs loosens that window and is simply not the one chosen. The
-command prints the rate, the window that set it and how many were considered; `--dry-run` prints without recording.
+window's bound, never lower it, so a busy hour of theirs loosens that window and is simply not the one chosen.
+Alongside the whole hours it also tries **step windows**, which run at the samples' own times from a step-up (the
+first reading of a new value) to the sample just before a later step-up, one to twelve hours apart. Every reading `v`
+means the true counter is at least `v` and below `v + 1`, so the bound has the same form; but at these ends the
+counter has only just passed its start reading and is just short of its end reading plus one, so the added one is
+nearly all real movement rather than rounding. No allowance for movement inside a sample gap is assumed, because none
+is needed: the bound holds however the account moved between two samples. The calibration is the smallest bound over
+both sets, so the step windows can only tighten it. The command prints the rate, the kind of window that set it
+(`hour` or `step`, also recorded in the event), its span and how many windows were considered; `--dry-run` prints
+without recording.
 Cache reads weigh a tenth of fresh input, a constant chosen by an earlier fit that agreed with the price list. The
 rate is an upper bound, and it tightens as the agent works through hours in which the account barely moves; until
 the first calibration the provisional constant stands in, marked `~`. `part` marks an hour not fully metered.
 
 The account's movement is kept only as a sanity check. When this agent's points over a window come to more than the
-account moved plus one, the figure is shown as it is, not capped, and marked `!`, as in `me !3.6%/1h`: the
-calibration looks stale, and `budget me` says so and names `budget calibrate`. `budget me` shows the share over any
+account moved plus one, the figure is shown as it is, not capped, and marked `!`, as in `me !3.6%/1h`. What
+`budget me` says depends on the calibration's age. Within six hours of calibrating the rate cannot have gone stale:
+it says the calibrated bound is loose for this hour, an upper bound that recalibrating after heavy hours tightens.
+After six hours it says the calibration looks stale and names `budget calibrate`. `budget me` shows the share over any
 window and puts the rest of the account's movement down to other agents and unmetered use. Calls are placed at their
 own times: an event that gathered calls across a window's edge counts only the part inside, and a call copied into a
 forked subagent's transcript is counted once.

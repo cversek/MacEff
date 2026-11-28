@@ -20,6 +20,13 @@ Calibration, the lower envelope:
   counter at a boundary is the newest ``weekly_all`` sample at or before it, if under an hour old; a
   window needs one at both ends. A window holding a weekly reset (the counter falls at a usable
   boundary inside it, or the two ends name different reset times) is skipped.
+- Step windows are considered too: from a step-up sample (the first reading of a new value) to the
+  sample just before a later step-up, at the samples' own times, spans of 1 to ``MAX_WINDOW_H``
+  hours. The bound has the same form, since every reading ``v`` means ``v <= C < v + 1``, but at these
+  ends the counter has just passed its start reading and is just short of its end reading plus one,
+  so the ``+ 1`` is nearly all real movement. No margin for movement inside a sample gap is needed,
+  so none is assumed. The calibration takes the minimum over both sets and records the window
+  ``kind`` (``hour`` or ``step``) that set it.
 - ``x_W`` spreads each metered event's tokens over its calls' span (``usage_meter.fraction_in``) and
   weighs cache reads at ``READ_WEIGHT``. A window needs ``MIN_WINDOW_TOKENS`` to count.
 - The event records the rate, the read weight, the method, the window that set it and how many were
@@ -31,7 +38,9 @@ comes first, which on an active seat is within a minute of events.
 
 The account's own movement is kept only as a sanity mark. When this agent's points over a window
 exceed what the account moved plus 1, the figure is shown as it is, marked ``!`` on the hook line,
-and ``budget me`` says the calibration looks stale and names ``budget calibrate``. Nothing is capped.
+and ``budget me`` explains it. Within ``LOOSE_WITHIN_H`` hours of a calibration it says the calibrated
+bound is loose for this hour (an upper bound, tightened by recalibrating after heavy hours); after that
+it says the calibration looks stale and names ``budget calibrate``. Nothing is capped.
 """
 
 import datetime as dt
@@ -61,6 +70,11 @@ MIN_WINDOW_TOKENS = 1e6
 #: The counter moves in whole percents: its measured rise can understate the account's use by this.
 GAUGE_STEP = 1.0
 STALE_MARK = "!"
+#: Within this many hours of a calibration, me above the account + 1 means the bound is loose for that
+#: hour, not that the calibration has gone stale: it is an upper bound from the start.
+LOOSE_WITHIN_H = 6.0
+HOUR_WINDOW = "hour"  # a window of whole hours, its ends read from the newest sample at each boundary
+STEP_WINDOW = "step"  # a window from a step-up sample to the sample before a later step-up
 PROVISIONAL = "provisional"
 CALIBRATED = "calibrated"
 
@@ -157,11 +171,103 @@ def _same_week(a: dict, b: dict) -> bool:
     return a["reset"] is None or b["reset"] is None or abs(a["reset"] - b["reset"]) < HOUR
 
 
+@dataclass(frozen=True, kw_only=True)
+class _Best:
+    bound: Optional[float] = None
+    window: Optional[dict] = None
+    considered: int = 0
+
+
+def _gap_tokens(times: List[float]) -> List[float]:
+    """This agent's weighted tokens in each gap ``[times[k], times[k+1])`` between samples, each event
+    spread over its span. One read of the log for all the gaps."""
+    import bisect
+    xs = [0.0] * max(0, len(times) - 1)
+    if not xs:
+        return xs
+    lo, hi = times[0], times[-1]
+    for ev in read_events(reverse=True, scope="all", only=usage_meter.EVENT, since=lo - HOUR):
+        first, last = usage_meter.event_span(ev)
+        if last < lo or first >= hi:
+            continue
+        w = _event_weighted(ev, READ_WEIGHT)
+        k0 = max(0, bisect.bisect_right(times, first) - 1)
+        k1 = min(len(xs) - 1, bisect.bisect_right(times, last) - 1)
+        for k in range(k0, k1 + 1):
+            xs[k] += usage_meter.fraction_in(ev, times[k], times[k + 1]) * w
+    return xs
+
+
+def _step_windows(start: float, now: float) -> _Best:
+    """The smallest bound over windows from a step-up sample to the sample just before a later step-up.
+
+    Every sample bounds the true counter ``C`` from both sides: a reading ``v`` means ``v <= C < v + 1``.
+    So between any two samples ``C`` rose by less than ``v_end + 1 - v_start``, the hour windows'
+    formula. What changes is where the ends sit. At a step-up sample (the first reading of ``N`` after
+    a lower one) ``C`` has only just passed ``N``; at the sample before a step-up ``C`` is just short
+    of ``v_end + 1``. There the ``+ 1`` is almost all real movement instead of rounding. Among windows
+    sharing their two readings, these ends also hold the most tokens, so they set the tightest bound
+    any pair of samples can give. No margin is needed and none is assumed: the bound holds however the
+    account moved inside a sample gap. Spans of 1 to ``MAX_WINDOW_H`` hours; a fall of the counter or
+    a change of reset time between the ends skips the window."""
+    pts = [p for p in _weekly_points(start, now) if p["t"] >= start]
+    n = len(pts)
+    if n < 3:
+        return _Best()
+    times = [p["t"] for p in pts]
+    cum = [0.0]
+    for x in _gap_tokens(times):
+        cum.append(cum[-1] + x)
+    week = [0] * n  # a new segment at every fall of the counter or change of reset time
+    for k in range(1, n):
+        broken = pts[k]["pct"] < pts[k - 1]["pct"] or not _same_week(pts[k - 1], pts[k])
+        week[k] = week[k - 1] + (1 if broken else 0)
+    ups = [k for k in range(1, n) if pts[k]["pct"] > pts[k - 1]["pct"]]
+    befores = [k for k in range(n - 1) if pts[k + 1]["pct"] > pts[k]["pct"]]
+    best, best_w, considered = None, None, 0
+    for i in ups:
+        for j in befores:
+            span = times[j] - times[i]
+            if span < HOUR:
+                continue
+            if span > MAX_WINDOW_H * HOUR:
+                break
+            if week[j] != week[i] or not _same_week(pts[i], pts[j]):
+                continue
+            x = cum[j] - cum[i]
+            if x < MIN_WINDOW_TOKENS:
+                continue
+            considered += 1
+            delta = pts[j]["pct"] - pts[i]["pct"]
+            bound = (delta + GAUGE_STEP) / x
+            if best is None or bound < best:
+                best = bound
+                best_w = {"kind": STEP_WINDOW, "start": times[i], "end": times[j], "hours": span / HOUR,
+                          "delta": delta, "tokens": x}
+    return _Best(bound=best, window=best_w, considered=considered)
+
+
 def envelope(now: float, lookback_days: float = LOOKBACK_DAYS) -> CalibrationAttempt:
-    """The smallest ``(delta_W + 1) / x_W`` over the windows of the last ``lookback_days``."""
+    """The smallest ``(delta_W + 1) / x_W`` over the windows of the last ``lookback_days``: the whole-hour
+    windows and the step windows (``_step_windows``), so adding the second set can only tighten it."""
     end = math.floor(now / HOUR) * HOUR
     hours = int(round(lookback_days * 24))
     start = end - hours * HOUR
+    hour = _hour_windows(start, hours, now)
+    step = _step_windows(start, now)
+    considered = hour.considered + step.considered
+    pick = step if step.bound is not None and (hour.bound is None or step.bound < hour.bound) else hour
+    if pick.bound is None:
+        return CalibrationAttempt(calibration=None, reason=(
+            f"no window of 1 to {MAX_WINDOW_H}h in the last {lookback_days:g} days has a counter at both "
+            f"ends and {MIN_WINDOW_TOKENS:.3g} weighted tokens"))
+    return CalibrationAttempt(calibration=Calibration(rate=pick.bound, read_weight=READ_WEIGHT, at=now,
+                                                      windows=considered, window=pick.window,
+                                                      lookback_days=lookback_days))
+
+
+def _hour_windows(start: float, hours: int, now: float) -> _Best:
+    """The smallest bound over windows of 1 to ``MAX_WINDOW_H`` whole hours from ``start``."""
     pts = _weekly_points(start - HOUR, now)
     bounds = [_point_at(pts, start + k * HOUR) for k in range(hours + 1)]
     xs = _hour_tokens(start, hours)
@@ -186,15 +292,9 @@ def envelope(now: float, lookback_days: float = LOOKBACK_DAYS) -> CalibrationAtt
             bound = (delta + GAUGE_STEP) / x
             if best is None or bound < best:
                 best = bound
-                best_w = {"start": start + i * HOUR, "end": start + j * HOUR, "hours": j - i,
-                          "delta": delta, "tokens": x}
-    if best is None:
-        return CalibrationAttempt(calibration=None, reason=(
-            f"no window of 1 to {MAX_WINDOW_H}h in the last {lookback_days:g} days has a counter at both "
-            f"ends and {MIN_WINDOW_TOKENS:.3g} weighted tokens"))
-    return CalibrationAttempt(calibration=Calibration(rate=best, read_weight=READ_WEIGHT, at=now,
-                                                      windows=considered, window=best_w,
-                                                      lookback_days=lookback_days))
+                best_w = {"kind": HOUR_WINDOW, "start": start + i * HOUR, "end": start + j * HOUR,
+                          "hours": j - i, "delta": delta, "tokens": x}
+    return _Best(bound=best, window=best_w, considered=considered)
 
 
 def _calibration_data(c: Calibration) -> dict:
@@ -292,15 +392,23 @@ def format_calibration(att: CalibrationAttempt, recorded: bool) -> str:
     c, w = att.calibration, att.calibration.window
     return "\n".join([
         f"calibrated rate {c.rate:.3g} points/weighted token (lower envelope)",
-        f"  set by {_when(w['start'])} to {_when(w['end'])} ({w['hours']}h):",
+        f"  set by a {w.get('kind', HOUR_WINDOW)} window, {_when(w['start'])} to {_when(w['end'])}"
+        f" ({w['hours']:.3g}h):",
         f"    account +{w['delta']:g}, {w['tokens']:.3g} weighted tokens",
-        f"  windows considered {c.windows}, last {c.lookback_days:g} days, 1 to {MAX_WINDOW_H}h",
+        f"  windows considered {c.windows} (whole-hour and step-to-step), last {c.lookback_days:g} days,"
+        f" 1 to {MAX_WINDOW_H}h",
         f"  cache read weight {c.read_weight:g}",
         f"recorded as {CALIBRATION_EVENT}" if recorded else "dry run: nothing recorded",
     ])
 
 
-def format_share(s: Share, cal: Optional[Calibration] = None) -> str:
+def is_loose(cal: Optional[Calibration], now: Optional[float]) -> bool:
+    """Whether a ``!`` at ``now`` reads as a loose bound rather than a stale calibration: the
+    calibration is under ``LOOSE_WITHIN_H`` hours old."""
+    return cal is not None and now is not None and now - cal.at < LOOSE_WITHIN_H * HOUR
+
+
+def format_share(s: Share, cal: Optional[Calibration] = None, now: Optional[float] = None) -> str:
     rate = (f"calibrated {_when(cal.at)}" if cal is not None
             else "calibrated" if s.rate_source == CALIBRATED else "provisional rate")
     lines = [f"share, last {s.window_h:g}h ({rate})",
@@ -311,7 +419,11 @@ def format_share(s: Share, cal: Optional[Calibration] = None) -> str:
         lines += [f"  account {s.account:6.2f}", f"  others  {s.remainder:6.2f}"]
         if s.account > 0 and not s.stale:
             lines.append(f"  my share {100 * s.points / s.account:.0f}%")
-    if s.stale:
+    if s.stale and is_loose(cal, now):
+        lines += [f"  {STALE_MARK} me is above the account + {GAUGE_STEP:g}: the calibrated",
+                  "    rate is an upper bound, loose for this hour;",
+                  "    recalibrating after heavy hours tightens it"]
+    elif s.stale:
         lines += [f"  {STALE_MARK} me is above the account + {GAUGE_STEP:g}: the",
                   "    calibration looks stale; run budget calibrate"]
     if s.read_weight is not None:
@@ -332,7 +444,7 @@ def me_lines(window_h: float) -> str:
     """The share block for ``budget me``; reads the newest calibration, never computes one."""
     now = time.time()
     cal = calibration(now)
-    return format_share(share(window_h, now=now, cal=cal), cal)
+    return format_share(share(window_h, now=now, cal=cal), cal, now)
 
 
 # ── hook line ─────────────────────────────────────────────────────────────────
@@ -416,7 +528,8 @@ def hook_suffix(now: Optional[float] = None) -> Optional[str]:
 
     The window is written out (``/1h``) because the weekly field beside it is a two-hour smoothed
     rate, and the two are not the same measurement. Points above the account's own movement over the
-    hour plus ``GAUGE_STEP`` are shown as they are and marked ``!``: the calibration looks stale.
+    hour plus ``GAUGE_STEP`` are shown as they are and marked ``!``; ``budget me`` says what it means
+    (a loose bound within ``LOOSE_WITHIN_H`` hours of calibrating, a stale calibration after).
 
     Reads the newest rolled event of the last 15 minutes and stops there. With none that recent
     (ticks are sparse) it computes the hour itself, as ``roll`` does, so the figure stays right.

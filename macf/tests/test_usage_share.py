@@ -92,8 +92,10 @@ def test_the_envelope_is_the_tightest_window_and_a_busy_hour_from_others_only_lo
     assert c is not None and c.read_weight == 0.1 and c.method == "lower_envelope"
     assert math.isclose(c.rate, (24.0 + 1.0) / (12 * 4e7))  # the 12 quiet hours: delta 24, x 4.8e8
     assert c.window["hours"] == 12 and c.window["end"] == end - 4 * HOUR and c.window["delta"] == 24.0
-    # 16 starts, each with up to 12 windows: 12*12 for the first five starts, then 11, 10 .. 1
-    assert c.windows == 5 * 12 + sum(range(1, 12))
+    assert c.window["kind"] == "hour"  # the step windows here start an hour later and hold fewer tokens
+    # hour windows: 16 starts, each with up to 12: 12 for the first five starts, then 11, 10 .. 1;
+    # step windows: from the step-up samples 1..15 to the pre-step samples up to 15, 1 to 12h apart
+    assert c.windows == (5 * 12 + sum(range(1, 12))) + (3 * 12 + sum(range(0, 12)))
     busy = (7.0 + 1.0) / 4e7
     assert busy > c.rate
     # the same history without the other agents' 5 points calibrates to the same rate
@@ -360,3 +362,77 @@ def test_part_marks_a_short_or_thin_hour_and_survives_the_rolled_event():
     rolled = [e["data"] for e in read_events(reverse=False, scope="all", only=usage_share.ROLLED_EVENT)]
     assert rolled[-1]["partial"] is True and rolled[-1]["calibration"] is None
     assert usage_share.hook_suffix(now + 5).endswith(usage_share.PARTIAL_MARK)
+
+
+# ── step windows and the mark's wording ───────────────────────────────────────
+
+TRUE_RATE = 5e-8
+
+
+def _steady(begin, gaps, per_gap=6e6, c0=10.05, gap=600.0):
+    """This agent alone on the account: ``per_gap`` tokens mid-way through each ``gap``-second gap, the
+    true counter rising by ``per_gap * TRUE_RATE`` a gap from ``c0``, read as its floor at every sample."""
+    rows = []
+    for k in range(gaps + 1):
+        rows.append(_sample(begin + k * gap, float(math.floor(round(c0 + k * per_gap * TRUE_RATE, 9)))))
+        if k < gaps:
+            rows.append(_metered(begin + k * gap + gap / 2, per_gap))
+    return rows
+
+
+def test_a_step_window_bounds_the_rate_tighter_than_the_whole_hours_and_the_minimum_takes_it():
+    """Alone on the account at a true 5e-8 points a token, read every ten minutes as a whole percent.
+    Every window's bound holds (none falls below the true rate), the step windows come closer to it
+    than any whole-hour window, and the calibration is theirs. The trace is kind to the whole hours,
+    whose best lands within about 1% of the truth; on real traces they come out far looser."""
+    end = _hour_end() - 86400
+    begin = end - 13 * HOUR
+    _write(_steady(begin, 78))
+    lookback_start = end - usage_share.LOOKBACK_DAYS * 24 * HOUR
+    hour = usage_share._hour_windows(lookback_start, usage_share.LOOKBACK_DAYS * 24, end + 60)
+    step = usage_share._step_windows(lookback_start, end + 60)
+    assert TRUE_RATE <= step.bound < hour.bound
+    c = usage_share.envelope(end + 60).calibration
+    assert c.rate == step.bound and c.window["kind"] == "step"
+    assert c.windows == hour.considered + step.considered
+    assert usage_share.format_calibration(usage_share.CalibrationAttempt(calibration=c), False).splitlines()[1] \
+        .startswith("  set by a step window, ")
+
+
+def test_a_step_window_ends_before_the_closing_step_up_and_counts_the_end_reading_plus_one():
+    """Readings 10, 11 (a step-up), 11, 11, 12 (a step-up), half an hour apart. The step window runs
+    from the first 11 to the last 11, so the 5e6 tokens in the gap where the counter stepped to 12 are
+    not in it, and its bound is (11 + 1 - 11) / 2e7: the end reading plus one, nothing more."""
+    end = _hour_end() - 86400
+    t = [end - 2 * HOUR + k * 1800 for k in range(5)]
+    _write([_sample(t[0], 10.0), _sample(t[1], 11.0), _metered(t[1] + 900, 1e7), _sample(t[2], 11.0),
+            _metered(t[2] + 900, 1e7), _sample(t[3], 11.0), _metered(t[3] + 900, 5e6), _sample(t[4], 12.0)])
+    c = usage_share.envelope(end + 60).calibration
+    assert c.window == {"kind": "step", "start": t[1], "end": t[3], "hours": 1.0, "delta": 0.0, "tokens": 2e7}
+    assert c.rate == pytest.approx(1.0 / 2e7)
+    hour = usage_share._hour_windows(end - usage_share.LOOKBACK_DAYS * 24 * HOUR,
+                                     usage_share.LOOKBACK_DAYS * 24, end + 60)
+    assert hour.bound == pytest.approx(3.0 / 2.5e7)  # 10 -> 12 over the two hours: looser
+
+
+def _over_the_account(now, calibrated_at):
+    _write([_calibrated(calibrated_at, 1e-7), _metered_rows(now - 600, rest=3.6e7),  # 3.6 points
+            _sample(now - 3000, 40.0), _sample(now - 60, 42.0)])  # the account rose 2
+
+
+def test_me_above_the_account_soon_after_calibrating_says_the_bound_is_loose_not_stale():
+    now = time.time()
+    _over_the_account(now, now - 2 * HOUR)
+    assert usage_share.hook_suffix(now) == f"· me !{_fmt(3.6)}%/1h"  # the mark stays on the hook line
+    out = usage_share.me_lines(1)
+    assert "me    !   3.60" in out and "loose for this hour" in out and "upper bound" in out
+    assert "recalibrating after heavy hours tightens it" in out and "stale" not in out
+    assert max(len(l) for l in out.splitlines()) <= 60
+
+
+def test_me_above_the_account_long_after_calibrating_says_the_calibration_looks_stale():
+    now = time.time()
+    _over_the_account(now, now - (usage_share.LOOSE_WITHIN_H + 1) * HOUR)
+    assert usage_share.hook_suffix(now) == f"· me !{_fmt(3.6)}%/1h"
+    out = usage_share.me_lines(1)
+    assert "looks stale; run budget calibrate" in out and "loose" not in out
