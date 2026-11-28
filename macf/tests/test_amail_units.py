@@ -71,6 +71,7 @@ def test_socket_version(sock, monkeypatch):
 
     unknown = _ask(sock, {"v": 99, **status})
     assert unknown["ok"] is False and unknown["v"] == socket_protocol.VERSION
+    assert "deprecated" not in unknown, "a refusal's reason is its error, not a deprecation note"
     assert "does not speak version 99" in unknown["error"] and f"speaks version {socket_protocol.VERSION}" in unknown["error"]
 
     # A change: this build now speaks 2, and declares 1 accepted through a day.
@@ -82,9 +83,15 @@ def test_socket_version(sock, monkeypatch):
     assert "superseded by 2 and accepted through" in inside["deprecated"]
     assert _ask(sock, status)["ok"] is True, "an unversioned client is version 1, inside the window too"
 
+    monkeypatch.setattr(socket_protocol, "SUPERSEDED", {1: today.isoformat()})
+    last_day = _ask(sock, {"v": 1, **status})
+    assert last_day["ok"] is True and "accepted through" in last_day["deprecated"], \
+        "the declared last day is still inside the window"
+
     monkeypatch.setattr(socket_protocol, "SUPERSEDED", {1: (today - datetime.timedelta(days=1)).isoformat()})
     closed = _ask(sock, {"v": 1, **status})
     assert closed["ok"] is False and "is no longer" in closed["error"]
+    assert "deprecated" not in closed, "a closed window's refusal carries no deprecation note"
     assert _ask(sock, {"v": 2, **status})["ok"] is True
 
 

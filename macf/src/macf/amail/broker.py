@@ -2798,9 +2798,13 @@ class _Handler(socketserver.StreamRequestHandler):
             # THE PROTOCOL VERSION (MIS-0004 R35). Checked before anything is
             # read from the request, so a client on another build is refused
             # with the versions this broker speaks rather than half-understood.
-            accepted, version_note = socket_protocol.check(req.get("v"))
+            accepted, note = socket_protocol.check(req.get("v"))
             if not accepted:
-                raise ValueError(version_note)
+                raise ValueError(note)
+            # Only an accepted request in a superseded version carries a note
+            # forward: a refusal's reason belongs in its error, never in
+            # `deprecated`, where it would read as "served, but update soon".
+            version_note = note
             # The kernel named the uid; the claim settles the rest. On an
             # unshared uid a disagreeing claim is refused and recorded; on a
             # uid the host tier declares shared the claim is the identity
