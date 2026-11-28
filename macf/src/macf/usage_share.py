@@ -35,6 +35,10 @@ Calibration, the lower envelope:
 - ``me`` is therefore an upper bound on this agent's points, and ``budget me`` says so.
 - ``x_W`` spreads each metered event's tokens over its calls' span (``usage_meter.fraction_in``) and
   weighs cache reads at ``READ_WEIGHT``. A window needs ``MIN_WINDOW_TOKENS`` to count.
+- Each model's tokens are scaled by its price relative to ``usage_meter.REFERENCE_MODEL``
+  (``usage_meter.priced``) before they enter ``x_W``, so the rate is points per reference-model token.
+  Without that the minimum would pick the window leaning most on a cheaper model and price main-model
+  hours at its rate. A model with no price factor weighs 1.0 and is named on stderr and in ``budget me``.
 - The event records the rate, the read weight, the method, the window that set it and how many were
   considered. With no calibration yet the provisional constant stands in, marked ``~``.
 
@@ -125,8 +129,8 @@ def is_stale(points: float, account: Optional[float]) -> bool:
 
 
 def _event_weighted(ev: dict, read_weight: Optional[float] = None) -> float:
-    return sum(usage_meter.weighted(row, read_weight)
-               for row in ((ev.get("data") or {}).get("by_model") or {}).values())
+    """An event's tokens in ``usage_meter.REFERENCE_MODEL`` tokens: by kind, then by each model's price."""
+    return usage_meter.priced_models((ev.get("data") or {}).get("by_model") or {}, read_weight)
 
 
 def _reset_time(value) -> Optional[float]:
@@ -335,7 +339,9 @@ def _calibration_data(c: Calibration) -> dict:
 
 
 def record_calibration(c: Calibration, refused: tuple = ()) -> None:
-    append_event(CALIBRATION_EVENT, {**_calibration_data(c), "refused": [_bare(w) for w in refused]})
+    append_event(CALIBRATION_EVENT, {**_calibration_data(c), "refused": [_bare(w) for w in refused],
+                                     "reference_model": usage_meter.REFERENCE_MODEL,
+                                     "model_factors": dict(usage_meter.MODEL_PRICE_FACTORS)})
 
 
 def _calibration_from(d) -> Optional[Calibration]:
@@ -471,7 +477,7 @@ def format_calibration(att: CalibrationAttempt, recorded: bool, dry_run: bool = 
         (f"  windows considered {c.windows} (whole-hour and step-to-step), last {c.lookback_days:g} days,"
          f" 1 to {MAX_WINDOW_H}h"),
         *_refused_lines(att.refused),
-        f"  cache read weight {c.read_weight:g}",
+        f"  cache read weight {c.read_weight:g}; tokens weighed as {usage_meter.REFERENCE_MODEL} by price factor",
         (f"  {c.rate / usage_meter.POINTS_PER_WEIGHTED_TOKEN:.3g}x the provisional rate"
          f" {usage_meter.POINTS_PER_WEIGHTED_TOKEN:.3g}: {'outside' if band else 'inside'} the band of"
          f" {SANITY_FACTOR:g}x either way"),

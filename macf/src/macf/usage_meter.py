@@ -58,7 +58,8 @@ FAULT_REPEAT_S = 3600.0
 DEDUP_HORIZON_S = 3600.0
 MAIN_CHECK_EVERY_S = 600.0
 
-#: Weights relative to one uncached input token, and the fitted points per weighted token.
+#: Weights relative to one uncached input token, and the fitted points per weighted token (a token of
+#: ``REFERENCE_MODEL``; other models are scaled to it by ``MODEL_PRICE_FACTORS``).
 RATE_LABEL = "provisional (fitted 2026-11-22)"
 POINTS_PER_WEIGHTED_TOKEN = 4.08e-8
 WEIGHTS = {
@@ -69,6 +70,27 @@ WEIGHTS = {
     "output_tokens": 5.0,
 }
 TOKEN_KINDS = tuple(WEIGHTS)
+
+#: The model whose tokens the rate is denominated in: a calibrated rate is points per weighted token of this
+#: model, and every other model's tokens are scaled to it by ``MODEL_PRICE_FACTORS`` first.
+REFERENCE_MODEL = "claude-opus-5-5"
+#: Each model's price per token relative to ``REFERENCE_MODEL``: the ratio of its list prices to the
+#: reference model's (input and output keep the same ratio within a model). Taken from Anthropic's published
+#: API price list as of 2026-11 (Opus 5.5 4/20, Sonnet 5.5 2/10, Haiku 5.5 0.10/0.50 up to 100K-token
+#: prompts, Fable 5.2 8/40, Fable 5.1 10/50 dollars per million tokens). Update this table when the price list
+#: changes or a model is added; keys are model id prefixes and the longest matching prefix wins. The account's
+#: points follow the price list, so without these factors one rate would stand for every model and the
+#: envelope's minimum would pick the window leaning most on the cheapest model (#1176).
+MODEL_PRICE_FACTORS = {
+    "claude-opus-5-5": 1.0,
+    "claude-sonnet-5-5": 0.5,
+    "claude-haiku-5-5": 0.025,
+    "claude-fable-5-2": 2.0,
+    "claude-fable-5-1": 2.5,
+}
+#: A model missing from the table weighs as the reference model, and is reported (``model_factor``).
+UNPRICED_FACTOR = 1.0
+_UNPRICED_REPORTED: set = set()  # models already reported on stderr by this process
 
 CAUSES = ("operator", "channel", "peer", "cron", "notice", "gate", "subagent")
 
@@ -540,6 +562,42 @@ def weighted(row: Dict[str, int], cache_read_weight: Optional[float] = None) -> 
     return sum(w[k] * row.get(k, 0) for k in TOKEN_KINDS)
 
 
+def _price_factor(model: str) -> Optional[float]:
+    """The table's factor for ``model`` by longest matching prefix, or None when it has none."""
+    best = max((p for p in MODEL_PRICE_FACTORS if str(model).startswith(p)), key=len, default=None)
+    return None if best is None else MODEL_PRICE_FACTORS[best]
+
+
+def is_priced(model: str) -> bool:
+    return _price_factor(model) is not None
+
+
+def model_factor(model: str) -> float:
+    """``model``'s price relative to ``REFERENCE_MODEL``. A model the table lacks weighs
+    ``UNPRICED_FACTOR`` and is named on stderr, once per process; ``budget me`` names it too."""
+    f = _price_factor(model)
+    if f is not None:
+        return f
+    if model not in _UNPRICED_REPORTED:
+        _UNPRICED_REPORTED.add(model)
+        print(f"⚠️ MACF: usage meter: no price factor for model {model!r}; weighing it as {REFERENCE_MODEL} "
+              f"({UNPRICED_FACTOR:g}). Add it to usage_meter.MODEL_PRICE_FACTORS", file=sys.stderr)
+    return UNPRICED_FACTOR
+
+
+def priced(row: Dict[str, int], model: str, cache_read_weight: Optional[float] = None) -> float:
+    """``row``'s weighted tokens in ``REFERENCE_MODEL`` tokens: weighted by kind, then by the model's price
+    factor. Everything that turns tokens into points uses this; ``weighted`` alone is kind-only, for the
+    tick fit, which fits a ratio per model itself. A row with no tokens needs no factor and reports nothing."""
+    w = weighted(row, cache_read_weight)
+    return w * model_factor(model) if w else 0.0
+
+
+def priced_models(by_model: Dict[str, Dict[str, int]], cache_read_weight: Optional[float] = None) -> float:
+    """The sum of ``priced`` over an event's ``by_model`` rows."""
+    return sum(priced(row, model, cache_read_weight) for model, row in (by_model or {}).items())
+
+
 def _stamp(value) -> Optional[float]:
     """An ISO time as epoch seconds, or None when absent or unreadable."""
     from datetime import datetime
@@ -600,8 +658,8 @@ def summarize(since: float, cache_read_weight: Optional[float] = None) -> Summar
                 if k in s.tokens:
                     s.tokens[k] += f * row.get(k, 0)
             s.calls += f * row.get("calls", 0)
-            s.by_cause[cause] = s.by_cause.get(cause, 0.0) + f * weighted(row, cache_read_weight)
-            s.low_by_cause[cause] = s.low_by_cause.get(cause, 0.0) + f * weighted(row, 0.0)
+            s.by_cause[cause] = s.by_cause.get(cause, 0.0) + f * priced(row, model, cache_read_weight)
+            s.low_by_cause[cause] = s.low_by_cause.get(cause, 0.0) + f * priced(row, model, 0.0)
     return s
 
 
@@ -618,9 +676,12 @@ def format_summary(s: Summary, label: str) -> str:
     low_w = sum(s.low_by_cause.values())
     lines = [f"usage, last {label}: {n(s.calls)} calls", "", "tokens"]
     lines += [f"  {names[k]:<15}{n(s.tokens[k]):>14}" for k in TOKEN_KINDS]
-    lines += ["", "by model (calls, weighted)"]
-    for model, row in sorted(s.by_model.items(), key=lambda kv: -weighted(kv[1])):
-        lines.append(f"  {model[:30]:<30}{n(row['calls']):>7}{short(weighted(row)):>9}")
+    lines += ["", f"by model (calls, weighted as {REFERENCE_MODEL})"]
+    for model, row in sorted(s.by_model.items(), key=lambda kv: -priced(kv[1], kv[0])):
+        lines.append(f"  {model[:30]:<30}{n(row['calls']):>7}{short(priced(row, model)):>9}")
+    unpriced = sorted(m for m, row in s.by_model.items() if weighted(row) and not is_priced(m))
+    if unpriced:
+        lines.append(f"  no price factor, weighed {UNPRICED_FACTOR:g}: {', '.join(unpriced)}")
     lines += ["", "by cause (weighted)"]
     for cause, w in sorted(s.by_cause.items(), key=lambda kv: -kv[1]):
         lines.append(f"  {cause:<15}{short(w):>10}{(100 * w / total_w if total_w else 0):>6.1f}%")

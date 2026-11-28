@@ -173,8 +173,18 @@ is refused and not recorded**, and the command exits 1 saying why: so far from t
 meter fault than a measurement. Look at the window it names and the runner-up before anything else; there is no
 override, and the provisional rate or the previous calibration stays in force. `--dry-run` prints without
 recording, and says when a real run would be refused.
-Cache reads weigh a tenth of fresh input, a constant chosen by an earlier fit that agreed with the price list. The
-rate is an upper bound, and it tightens as the agent works through hours in which the account barely moves. **So
+Cache reads weigh a tenth of fresh input, a constant chosen by an earlier fit that agreed with the price list.
+**Each model's tokens are weighed by its price relative to the main model** before they count anywhere: in the
+calibration's windows, the hook line, `budget me`, the digest and the sprint records. The account's points follow
+the price list, and the models differ there several-fold, so one rate for every model would let the minimum pick
+the window whose tokens were cheapest, the one leaning most on a less expensive model, and then price main-model
+hours at that rate: `me` would read low in the hours that cost most, by an amount the band of four does not catch.
+The factors are the list-price ratios to `claude-opus-5-5`, kept in a small table in the usage meter keyed by model
+id prefix (Sonnet 5.5 a half, Haiku 5.5 a fortieth, Fable 5.2 twice); the calibrated rate is therefore points per
+`claude-opus-5-5` token, and the calibration event records the factors it used. A model missing from the table
+weighs as the main model and is never passed over silently: it is named once on stderr and in `budget me`, and the
+remedy is to add its ratio to the table when the price list changes or a model arrives.
+The rate is an upper bound, and it tightens as the agent works through hours in which the account barely moves. **So
 `me` is an upper bound on this agent's points, not an estimate**: it errs high by construction, and the figures of
 several seats on one account added together come to more than the account moved. `budget me` says so on its own
 line; the hook line keeps the bare figure. Until

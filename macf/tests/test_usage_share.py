@@ -526,3 +526,73 @@ def test_calibrate_refuses_a_rate_outside_a_factor_of_four_of_the_provisional_co
     with pytest.raises(SystemExit) as e:
         main(["budget", "calibrate"])
     assert (e.value.code == 1) is refused and n() == (0 if refused else 1)
+
+
+# ── per-model price factors (#1176 review) ──────────────────────────────────────
+
+def _metered_models(t, rows):
+    """One event at ``t`` with ``rows``: model to uncached input tokens."""
+    return {"timestamp": t, "event": usage_meter.EVENT,
+            "data": {"by_model": {m: {"input_tokens": tok, "calls": 1} for m, tok in rows.items()},
+                     "calls": 5, "cause": "operator"}}
+
+
+def _model_hours(model, specs, end):
+    rows = _hours(specs, end)
+    for r in rows:
+        if r["event"] == usage_meter.EVENT:
+            r["data"]["by_model"] = {model: r["data"]["by_model"]["m"]}
+    return rows
+
+
+def test_a_window_on_a_cheaper_model_bounds_the_rate_looser_and_never_pulls_the_envelope_down():
+    """The account's points follow the price list. Sixteen hours of 4e7 main-model tokens moved the counter 2
+    an hour; the same tokens on the half-price model give a bound twice as loose, and an afternoon of
+    half-price work that moved the account as much as main-model work did calibrates to the same rate."""
+    end = _hour_end() - 86400
+    main, cheap = usage_meter.REFERENCE_MODEL, "claude-sonnet-5-5"
+    half = usage_meter.MODEL_PRICE_FACTORS[cheap]
+    assert half == 0.5
+    _write(_model_hours(main, [(4e7, 2.0)] * 16, end))
+    on_main = usage_share.envelope(end + 60).calibration.rate
+    _clear()
+    _write(_model_hours(cheap, [(4e7, 2.0)] * 16, end))
+    assert math.isclose(usage_share.envelope(end + 60).calibration.rate, on_main / half)
+    # mixed: twelve main-model hours, then four hours of twice the tokens on the half-price model, same points
+    _clear()
+    rows = _model_hours(main, [(4e7, 2.0)] * 12 + [(0, 2.0)] * 4, end)
+    rows += [_metered_models(end - k * HOUR - 1800, {cheap: 8e7}) for k in range(4)]
+    _write(rows)
+    assert math.isclose(usage_share.envelope(end + 60).calibration.rate, on_main)
+
+
+def test_an_unknown_model_weighs_as_the_reference_and_is_reported_once_and_in_budget_me(monkeypatch, capsys):
+    monkeypatch.setattr(usage_meter, "_UNPRICED_REPORTED", set())
+    row = {"input_tokens": 1000, "calls": 1}
+    assert usage_meter.priced(row, "claude-mystery-9") == usage_meter.priced(row, usage_meter.REFERENCE_MODEL) == 1000
+    assert usage_meter.priced(row, "claude-mystery-9") == 1000
+    err = capsys.readouterr().err
+    assert err.count("no price factor for model 'claude-mystery-9'") == 1
+    assert usage_meter.priced(row, "claude-haiku-5-5-20261101") == 25  # longest prefix, dated id
+    assert usage_meter.priced({"input_tokens": 0, "calls": 1}, "<synthetic>") == 0  # no tokens, no report
+    assert "<synthetic>" not in capsys.readouterr().err
+    now = time.time()
+    _write([_metered_models(now - 60, {"claude-mystery-9": 1000, usage_meter.REFERENCE_MODEL: 1000})])
+    text = usage_meter.format_summary(usage_meter.summarize(now - HOUR), "1h")
+    assert "no price factor, weighed 1: claude-mystery-9" in text
+
+
+def test_share_the_hook_hour_and_the_digest_weigh_each_model_by_its_price():
+    now = time.time()
+    _write([_calibrated(now - 86400, 1e-7),
+            _metered_models(now - 600, {usage_meter.REFERENCE_MODEL: 1e6, "claude-sonnet-5-5": 1e6,
+                                        "claude-haiku-5-5": 1e6})])
+    x = 1e6 * (1.0 + 0.5 + 0.025)
+    assert math.isclose(usage_share.share(1, now=now).weighted_tokens, x)
+    assert math.isclose(usage_share._hour_points(now).points, 1e-7 * x)
+    assert usage_share.hook_suffix(now) == f"· me {_fmt(1e-7 * x)}%/1h"
+    from macf import budget_digest
+    sp = budget_digest._spend(now, 0.1)
+    assert math.isclose(sum(sp.kinds.values()), x) and math.isclose(sum(sp.by_cause.values()), x)
+    assert math.isclose(sp.latest_priced, x / 3)
+    assert math.isclose(sum(usage_meter.summarize(now - HOUR, 0.1).by_cause.values()), x)  # budget me, sprint records

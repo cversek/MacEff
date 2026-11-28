@@ -65,11 +65,12 @@ def _points(x: float) -> str:
 
 @dataclass(frozen=True, kw_only=True)
 class Spend:
-    kinds: Dict[str, float]  # weighted tokens by kind
+    kinds: Dict[str, float]  # weighted tokens by kind, each model's scaled by its price factor
     by_cause: Dict[str, float]
     calls: int
     cache_read: int
     latest_call: Dict[str, float]  # mean tokens per call of the newest event
+    latest_priced: float = 0.0  # the same call's weighted tokens at its models' price factors
 
 
 def _spend(now: float, read_weight: Optional[float] = None) -> Optional[Spend]:
@@ -82,6 +83,7 @@ def _spend(now: float, read_weight: Optional[float] = None) -> Optional[Spend]:
     by_cause: Dict[str, float] = {}
     calls = cache_read = 0
     latest = None
+    latest_priced = 0.0
     for ev in read_events(reverse=True, scope="all", only=usage_meter.EVENT, since=now - HOUR):
         d = ev.get("data") or {}
         rows = list((d.get("by_model") or {}).values())
@@ -92,18 +94,21 @@ def _spend(now: float, read_weight: Optional[float] = None) -> Optional[Spend]:
         if f <= 0:
             continue
         cause = d.get("cause") or "operator"
-        for r in rows:
+        by_model = d.get("by_model") or {}
+        for model, r in by_model.items():
+            factor = usage_meter.model_factor(model) if usage_meter.weighted(r) else 0.0
             for k in usage_meter.TOKEN_KINDS:
-                kinds[k] += f * weights[k] * r.get(k, 0)
-            by_cause[cause] = by_cause.get(cause, 0.0) + f * usage_meter.weighted(r, read_weight)
+                kinds[k] += f * factor * weights[k] * r.get(k, 0)
+            by_cause[cause] = by_cause.get(cause, 0.0) + f * usage_meter.priced(r, model, read_weight)
             cache_read += f * r.get("cache_read_input_tokens", 0)
         calls += f * n
         if latest is None:
             latest = {k: sum(r.get(k, 0) for r in rows) / n for k in usage_meter.TOKEN_KINDS}
+            latest_priced = usage_meter.priced_models(by_model, read_weight) / n
     if not calls or sum(kinds.values()) <= 0 or latest is None:
         return None
     return Spend(kinds=kinds, by_cause=by_cause, calls=max(1, round(calls)), cache_read=round(cache_read),
-                 latest_call=latest)
+                 latest_call=latest, latest_priced=latest_priced)
 
 
 def _share_line(wt: float, rate: Rate, now: float) -> str:
@@ -146,7 +151,7 @@ def digest(now: Optional[float] = None) -> Optional[str]:
         lines.append(f"  driver: {NAMES[big]}, {pct:.0f}% of points")
     lines.append("  " + _share_line(wt, rate, now))
     ctx = sum(v for k, v in sp.latest_call.items() if k != "output_tokens")
-    nxt = usage_meter.weighted(sp.latest_call, rate.read_weight) * rate.value
+    nxt = sp.latest_priced * rate.value
     lines.append(f"  one more turn at {_short(ctx)} context: ~{_points(nxt)}")
     append_event(DIGEST_EVENT, {"points": pts, "calls": sp.calls, "window_h": 1})
     return "\n".join(lines)

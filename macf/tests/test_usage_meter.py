@@ -362,12 +362,12 @@ def test_summary_text_totals_and_window():
     small = {"input_tokens": 100, "cache_write_1h_tokens": 0, "cache_write_5m_tokens": 400,
              "cache_read_input_tokens": 1000, "output_tokens": 50, "calls": 3}
     now = time.time()
-    _emit_at(now - 2 * 86400, um.EVENT, {"path": "p", "cause": "cron", "by_model": {"big-model": big}})
-    _emit_at(now - 60, um.EVENT, {"path": "p", "cause": "gate", "by_model": {"big-model": big}})
+    _emit_at(now - 2 * 86400, um.EVENT, {"path": "p", "cause": "cron", "by_model": {"claude-opus-5-5": big}})
+    _emit_at(now - 60, um.EVENT, {"path": "p", "cause": "gate", "by_model": {"claude-opus-5-5": big}})
     _emit_at(now - 30, um.EVENT, {"path": "q", "by_model": {"tiny": small}})  # no cause: operator
     s = um.summarize(now - 3600)
     assert s.calls == 123 and s.tokens["cache_read_input_tokens"] == 40_001_000 and s.tokens["input_tokens"] == 2_000_100
-    assert set(s.by_cause) == {"gate", "operator"} and s.by_model["big-model"]["calls"] == 120
+    assert set(s.by_cause) == {"gate", "operator"} and s.by_model["claude-opus-5-5"]["calls"] == 120
     expected = (
         'usage, last 1h: 123 calls\n'
         '\n'
@@ -378,9 +378,10 @@ def test_summary_text_totals_and_window():
         '  cache read         40,001,000\n'
         '  output                300,050\n'
         '\n'
-        'by model (calls, weighted)\n'
-        '  big-model                         120    8.50M\n'
+        'by model (calls, weighted as claude-opus-5-5)\n'
+        '  claude-opus-5-5                   120    8.50M\n'
         '  tiny                                3      950\n'
+        '  no price factor, weighed 1: tiny\n'
         '\n'
         'by cause (weighted)\n'
         '  gate                8.50M 100.0%\n'
