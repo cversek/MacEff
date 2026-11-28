@@ -765,3 +765,30 @@ def test_a_window_paced_shorter_lets_the_next_tick_wake(tmp_path):
     notifier.pace(30.0)
     assert h.waker.refractory_s == 30.0
     assert h.waker.tick([ID1, ID2]) == "sent"
+
+
+LOGIN_SCREEN = "\n".join([
+    " Claude Code can be used with your Claude subscription or billed based on API usage through your Console account.",
+    "",
+    " Select login method:",
+    "",
+    " ❯ 1. Claude account with subscription · Pro, Max, Team, or Enterprise",
+    "   2. Anthropic Console account · API usage billing",
+    "   3. 3rd-party platform · Amazon Bedrock, Microsoft Foundry, or Vertex AI",
+])
+
+
+def test_nothing_is_typed_into_a_session_waiting_on_its_login():
+    """MIS-0002-R206 (layer_MUST-NOT_type_into_auth_wait): a typed notice landing in a /login flow is
+    the worst place for one (Ira and CTB on #1161). The core says the session waits on its login,
+    so the fallback holds before it reads the screen, even one that looks idle. With no such word,
+    the login screen itself is not an idle prompt, so it holds there too."""
+    pane, events = FakePane([screen()]), []
+    w = _waker(pane, events, waiting_on=lambda: "its login").waker
+    assert w.tick([ID1]) is None and pane.typed == [] and pane.enters == 0
+    assert any(e == wk.EVENT_HELD and "its login" in d["reason"] for e, d in events)
+
+    assert wk.classify(LOGIN_SCREEN) != wk.IDLE_EMPTY
+    pane, events = FakePane([LOGIN_SCREEN]), []
+    w = _waker(pane, events).waker
+    assert w.tick([ID1]) is None and pane.typed == [] and pane.enters == 0

@@ -16,6 +16,7 @@ A grant can also be revoked before its date, which no date shows. That case stil
 the session's own authentication failure.
 """
 import json
+import os
 import sys
 import time
 from typing import Callable, Dict, Iterable, Optional
@@ -110,6 +111,36 @@ def read_assessment(now: Optional[float] = None,
         return assess(None, now, why_unread=getattr(e, "short", None) or "no credential reachable",
                       expiring_s=expiring_s)
     return assess(raw, now, expiring_s=expiring_s)
+
+
+def credential_fingerprint(reader: Optional[Callable[[], str]] = None) -> Optional[tuple]:
+    """What changes when anyone logs in again on this account: the stored credential's refresh grant end,
+    or its access token's end only when it states no refresh grant; None when there is no credential to
+    read or it states neither. Only those two fields are read, as in ``assess``: no token leaves
+    the read. A session waiting on its login compares this with what it saw when it failed, so
+    one ``/login`` returns every session sharing the credential to running, not only the one it was
+    typed in (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person))."""
+    from macf.budget import BudgetError, read_credential
+    if reader is None and os.environ.get("CLAUDE_CONFIG_DIR"):
+        # A seat with a config dir of its own keeps its own credential, and the reader takes the default
+        # Keychain entry or ~/.claude: another seat's login would end this seat's wait. Until the reader
+        # follows the config dir (#1154), such a seat's wait ends only by a reply (CTB's review of #1163).
+        return None  # noqa: MACEFF003 - a credential that may be another seat's is no evidence; the wait stands
+    try:
+        raw = (reader or read_credential)()
+    except BudgetError:
+        return None  # noqa: MACEFF003 - no credential reachable is a state, not a fault: no dates to compare, so the wait stands
+    # A credential that isn't the client's JSON raises: the caller warns and leaves the wait as it is.
+    oauth = json.loads(raw).get("claudeAiOauth") or {}
+    # The refresh grant's end changes only when someone logs in again. The access token's end changes at
+    # every routine refresh, so on a shared credential a healthy session's refresh would end the others'
+    # waits while they still can't authenticate (Ira's review of #1163). It is read only when the credential
+    # states no refresh grant at all.
+    refresh = _seconds(oauth.get("refreshTokenExpiresAt"))
+    if refresh is not None:
+        return ("refresh", refresh)
+    access = _seconds(oauth.get("expiresAt"))
+    return ("access", access) if access is not None else None
 
 
 def warn_seconds(declaration) -> float:

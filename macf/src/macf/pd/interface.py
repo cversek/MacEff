@@ -396,6 +396,23 @@ NoticeRoute = Literal["agent", "operator", "both", "held_until_present"]
 #: How a state change for an authentication failure begins its reason (MIS-0002-R19). The
 #: session is still running, so a daemon that starts while it reads failed adopts it by this.
 AUTH_FAILED_REASON = "authentication failed"
+#: What a session that can't authenticate waits on, in its state record's ``waiting_on``
+#: (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person)). The watch, the status and the attach
+#: key on these values, never on the reason's words. ``login``: an account's login has expired or
+#: was refused, and a person runs ``/login``. ``credential``: an API key was rejected, and there is
+#: no ``/login`` to run; a person replaces the key.
+LOGIN_WAIT = "login"
+CREDENTIAL_WAIT = "credential"
+AUTH_WAITS = (LOGIN_WAIT, CREDENTIAL_WAIT)
+#: What a person does about each, as the status, the attach and the watch say it.
+AUTH_REMEDY = {LOGIN_WAIT: "attach and run /login",
+               CREDENTIAL_WAIT: "replace the rejected API key, then restart the session"}
+
+
+def auth_wait(said: Optional[str]) -> str:
+    """Which wait a failed authentication is, from what the client said: a rejected API key names
+    its key ("Invalid API key"), and every other failure is a login's (MIS-0002-R19)."""
+    return CREDENTIAL_WAIT if said and "api key" in said.lower() else LOGIN_WAIT
 #: The notice source of mail left unread past the declared threshold (MIS-0002-R55).
 UNREAD_MAIL_SOURCE = "pd_unread_mail"
 #: The notice source of a prompt run that met a permission prompt (MIS-0002-R32).
@@ -758,7 +775,7 @@ class Liveness(_Closed):
       that (MIS-0002-R22 (layer_MUST-NOT_restart_waiting_unit)).
     - ``auth_failed``: what the harness said when it could not authenticate, while it can't;
       the daemon reads the session failed until it can again
-      (MIS-0002-R19 (auth_failure_MUST_read_failed)).
+      (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person)).
     """
 
     agent: str
@@ -788,6 +805,10 @@ class UnitState(_Closed):
     #: unit has been in its state from this when it is present, else from the record's own time,
     #: so a repeat never makes a failure look as new as the repeat (#896).
     since: Optional[float] = None
+    #: What a unit ``waiting_on_a_person`` waits on, as data: ``LOGIN_WAIT`` or ``CREDENTIAL_WAIT`` for a session that
+    #: can't authenticate (MIS-0002-R19). None for a prompt, whose words are in the reason, and
+    #: for every other state.
+    waiting_on: Optional[str] = None
 
 
 class Asker(_Closed):
@@ -1117,8 +1138,12 @@ class UnitStatus(_Closed):
     proc_start: Optional[str] = None
     since: float
     restart_held_until: Optional[str] = None
-    #: What the client said while it can't log in, on a session held failed for its login (MIS-0002-R19
-    #: (auth_failure_MUST_read_failed)). That session still runs, so a person can attach and log in.
+    #: What a unit ``waiting_on_a_person`` waits on, as data: ``LOGIN_WAIT`` or ``CREDENTIAL_WAIT`` for a session that can't
+    #: authenticate (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person)). The status and the attach
+    #: key on this, never on ``auth_failed``'s words. That session still runs, so a person can attach
+    #: and log in.
+    waiting_on: Optional[str] = None
+    #: What the client said while it can't log in, for the person reading the status.
     auth_failed: Optional[str] = None
 
 

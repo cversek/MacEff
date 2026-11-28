@@ -471,7 +471,7 @@ def test_the_core_names_the_session_waiting_and_its_transcript(tmp_path):
     core = Core.__new__(Core)
     core._placeholders = {"agent_home": str(tmp_path)}
     sess = NS(spec=NS(kind="session", command=["py", "-m", "x", "--project-dir", "{agent_home}/proj"]),
-              state="running", client_session=None)
+              state="running", client_session=None, auth_failed=None)
     core._units = {"session": sess, "monitor": NS(spec=NS(kind="service", command=[]), state="running")}
     assert core.session_waiting_on() is None
     folder = tmp_path / ".claude" / "projects" / str(tmp_path / "proj").replace("/", "-").replace("_", "-")
@@ -487,6 +487,8 @@ def test_the_core_names_the_session_waiting_and_its_transcript(tmp_path):
     assert core.session_transcript(claude_home=home) == folder / "bbbb.jsonl"
     sess.state = "waiting_on_a_person"
     assert core.session_waiting_on() == "a person"
+    sess.auth_failed = "Login expired"          # waiting on its login: the wake is told so (MIS-0002-R206)
+    assert core.session_waiting_on() == "its login"
 
 
 def test_the_inbox_lists_unread_mail_newest_first_one_line_each_with_the_mark_list_shows(home, box, monkeypatch,
