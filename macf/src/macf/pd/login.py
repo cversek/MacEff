@@ -16,6 +16,7 @@ A grant can also be revoked before its date, which no date shows. That case stil
 the session's own authentication failure.
 """
 import json
+import os
 import sys
 import time
 from typing import Callable, Dict, Iterable, Optional
@@ -120,6 +121,11 @@ def credential_fingerprint(reader: Optional[Callable[[], str]] = None) -> Option
     one ``/login`` returns every session sharing the credential to running, not only the one it was
     typed in (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person))."""
     from macf.budget import BudgetError, read_credential
+    if reader is None and os.environ.get("CLAUDE_CONFIG_DIR"):
+        # A seat with a config dir of its own keeps its own credential, and the reader takes the default
+        # Keychain entry or ~/.claude: another seat's login would end this seat's wait. Until the reader
+        # follows the config dir (#1154), such a seat's wait ends only by a reply (CTB's review of #1163).
+        return None  # noqa: MACEFF003 - a credential that may be another seat's is no evidence; the wait stands
     try:
         raw = (reader or read_credential)()
     except BudgetError:

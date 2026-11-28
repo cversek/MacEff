@@ -779,7 +779,7 @@ LOGIN_SCREEN = "\n".join([
 
 
 def test_nothing_is_typed_into_a_session_waiting_on_its_login():
-    """MIS-0002-R203 (layer_MUST-NOT_type_into_auth_wait): a typed notice landing in a /login flow is
+    """MIS-0002-R206 (layer_MUST-NOT_type_into_auth_wait): a typed notice landing in a /login flow is
     the worst place for one (Ira and CTB on #1161). The core says the session waits on its login,
     so the fallback holds before it reads the screen, even one that looks idle. With no such word,
     the login screen itself is not an idle prompt, so it holds there too."""

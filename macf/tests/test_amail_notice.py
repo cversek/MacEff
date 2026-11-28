@@ -487,7 +487,7 @@ def test_the_core_names_the_session_waiting_and_its_transcript(tmp_path):
     assert core.session_transcript(claude_home=home) == folder / "bbbb.jsonl"
     sess.state = "waiting_on_a_person"
     assert core.session_waiting_on() == "a person"
-    sess.auth_failed = "Login expired"          # waiting on its login: the wake is told so (MIS-0002-R203)
+    sess.auth_failed = "Login expired"          # waiting on its login: the wake is told so (MIS-0002-R206)
     assert core.session_waiting_on() == "its login"
 
 

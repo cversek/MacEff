@@ -494,3 +494,17 @@ def test_what_the_adapter_read_names_the_wait(said, kind):
     from macf.pd.interface import auth_wait
     assert auth_wait(said) == kind
 
+
+def test_a_seat_with_its_own_config_dir_reads_no_credential(monkeypatch):
+    """A seat with CLAUDE_CONFIG_DIR keeps its own credential, and the reader takes the default one, so
+    another seat's /login would end this seat's login wait. Until the reader follows the config dir, such
+    a seat reads no credential and its wait ends only by a reply (CTB's review of #1163)."""
+    import macf.budget as budget
+    from macf.pd.login import credential_fingerprint
+    stored = json.dumps({"claudeAiOauth": {"expiresAt": 1_000_000, "refreshTokenExpiresAt": 2_000_000}})
+    monkeypatch.setattr(budget, "read_credential", lambda: stored)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    assert credential_fingerprint() == (2000.0, 1000.0)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/home/seat/.claude-seat")
+    assert credential_fingerprint() is None
+

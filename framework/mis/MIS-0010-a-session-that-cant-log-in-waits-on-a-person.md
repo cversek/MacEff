@@ -6,7 +6,7 @@
 **Authors**: the repo owner, who asked for the change on issue #1161; drafted by the container-management maintainer
 **Secretary**: the Secretary of deliberation #493
 **Created**: 2026-11-27
-**Amends**: MIS-0002: R19 (auth_failure_MUST_read_failed, now auth_failure_MUST_read_waiting_on_person); adds R202 (auth_wait_MUST_alert_at_once), R203 (layer_MUST-NOT_type_into_auth_wait) and R204 (login_wait_MUST_end_when_credential_renewed)
+**Amends**: MIS-0002: R19 (auth_failure_MUST_read_failed, now auth_failure_MUST_read_waiting_on_person); adds R205 (auth_wait_MUST_alert_at_once), R206 (layer_MUST-NOT_type_into_auth_wait) and R207 (login_wait_MUST_end_when_credential_renewed)
 **Resolution**: pending: the sign-offs of MIS-0002's other two maintainers (section 3), then the repo owner's merge. The number is provisional, the next one no open pull request holds, for the repo owner to confirm.
 
 ---
@@ -24,15 +24,15 @@ R19's decidable path changes with it: `test_auth_failure_is_failed` becomes `tes
 
 The session stays running so a person can attach and log in. That needs no new text: R22 (layer_MUST-NOT_restart_waiting_unit) forbids restarting a waiting unit, and the attach reaches every live state.
 
-**New requirements, R202 to R204.**
-> R202: The outside watch MUST alert on a session waiting on its authentication at the first pass that reads the wait, keyed on the state record's `waiting_on`. (auth_wait_MUST_alert_at_once)
+**New requirements, R205 to R207.**
+> R205: The outside watch MUST alert on a session waiting on its authentication at the first pass that reads the wait, keyed on the state record's `waiting_on`. (auth_wait_MUST_alert_at_once)
 >
-> R203: The persistent layer MUST NOT type into a session while it waits on its authentication. (layer_MUST-NOT_type_into_auth_wait)
+> R206: The persistent layer MUST NOT type into a session while it waits on its authentication. (layer_MUST-NOT_type_into_auth_wait)
 >
-> R204: When the stored credential a session waiting on its login uses is renewed, the primal daemon MUST set the session's state back to running. (login_wait_MUST_end_when_credential_renewed)
+> R207: When the stored credential a session waiting on its login uses is renewed, the primal daemon MUST set the session's state back to running. (login_wait_MUST_end_when_credential_renewed)
 
 **Around them, in the same pull request:**
-- MIS-0002's Rationale and Conformance gain lines for R19 and R202 to R204, and its Revision History gains a line.
+- MIS-0002's Rationale and Conformance gain lines for R19 and R205 to R207, and its Revision History gains a line.
 - The `persistent_layer` policy describes the login wait: what the status, the attach and the watch show, how the wait ends, and that notices are held meanwhile.
 - The code: the state record and the daemon's status carry `waiting_on`; the core enters and leaves the wait; the watch, the status line and the attach key on the field; the session's monitor reads the stored credential's expiry dates so that a login made elsewhere ends the wait.
 
@@ -46,17 +46,17 @@ and then: "Work on the fix with the attachable login expired waiting state."
 
 **Why R19 had to change.** Most of the behavior already existed. R19 held the session running while it read failed, and #1022 let the attach reach it, so the refusal came from a deployment that predated #1022. The label is the part a requirement fixed. R19 required `failed`, and "failed" reads as "broken: go to the host". The session was waiting for a person, which is the case R21 (pd_MUST_report_waiting_on_person) and R22 (layer_MUST-NOT_restart_waiting_unit) already define. R22 forbids restarting a waiting unit, which is the behavior the core spelled out by hand for a failed login.
 
-**What R19 keeps.** R19 exists so that a session that can't work never reads idle or healthy (the expired login of 2026-10-04). Waiting on a person is neither. The status, the attach and the outside watch all treat it as needing someone, and R202 makes the watch say so at once.
+**What R19 keeps.** R19 exists so that a session that can't work never reads idle or healthy (the expired login of 2026-10-04). Waiting on a person is neither. The status, the attach and the outside watch all treat it as needing someone, and R205 makes the watch say so at once.
 
 **What the host-side maintainer asked for** (#1161, comment 7230662153), and where each landed:
-1. **Name the wait as data, not only as words.** R19 now names `waiting_on`, and R202 keys the watch on it. The status and the attach read the field too. A login wait can't be confused with a permission prompt, which R23 forbids the layer to answer.
-2. **Alert on a login wait at once, not after the hold allowance.** R202. A prompt may be answered within minutes; a login doesn't come back by itself.
-3. **Return to running should follow the credential.** Where several sessions share one credential, a `/login` in one renews it for all, and the others, quiet, write nothing that would show it. R204. The session's monitor compares the stored credential's two expiry dates with those it saw at the failure, and only those two fields are read. R204's test has two sessions waiting and one login, and both return.
-4. **Say what happens to notices meanwhile.** R203. The keystroke fallback already holds while the session waits on a person, and the core now names what it waits on. R203 makes that a requirement for the whole layer, so no later path types into a `/login` flow.
+1. **Name the wait as data, not only as words.** R19 now names `waiting_on`, and R205 keys the watch on it. The status and the attach read the field too. A login wait can't be confused with a permission prompt, which R23 forbids the layer to answer.
+2. **Alert on a login wait at once, not after the hold allowance.** R205. A prompt may be answered within minutes; a login doesn't come back by itself.
+3. **Return to running should follow the credential.** Where several sessions share one credential, a `/login` in one renews it for all, and the others, quiet, write nothing that would show it. R207. The session's monitor compares the stored credential's two expiry dates with those it saw at the failure, and only those two fields are read. R207's test has two sessions waiting and one login, and both return. A seat with a config directory of its own reads no credential for this, since the reader would take another seat's, so its wait ends only by a reply until the reader follows the config directory (#1154). That keeps R207's promise safe, not wide: it never ends a wait on another seat's login.
+4. **Say what happens to notices meanwhile.** R206. The keystroke fallback already holds while the session waits on a person, and the core now names what it waits on. R206 makes that a requirement for the whole layer, so no later path types into a `/login` flow.
 
 **What the head maintainer asked for** (#1161, comment 7230997677), and where each landed:
-1. **Name what the adapter read, not always "login".** A seat on an API key has no `/login` to run. R19 now names "the login or credential", and its slug is general. The core reads which from what the client said: a rejected API key names its key, and every other failure is a login's. The status, the attach and the watch each give the remedy that fits: `/login` for a login, and replacing the key for a credential. R204 stays the login's alone, since an API key has no stored dates to watch.
-2. **Hold everything that would type into that session.** R203 now binds the whole persistent layer, not only the keystroke fallback. Today the fallback is the only path that types into a session. An entry's wake reaches the session through it, and a schedule's prompt run into the live session isn't run yet. R203 binds that run too when it lands. Its new test gives the fallback a login screen and checks that it holds, both with the core's word that the session waits and without it.
+1. **Name what the adapter read, not always "login".** A seat on an API key has no `/login` to run. R19 now names "the login or credential", and its slug is general. The core reads which from what the client said: a rejected API key names its key, and every other failure is a login's. The status, the attach and the watch each give the remedy that fits: `/login` for a login, and replacing the key for a credential. R207 stays the login's alone, since an API key has no stored dates to watch.
+2. **Hold everything that would type into that session.** R206 now binds the whole persistent layer, not only the keystroke fallback. Today the fallback is the only path that types into a session. An entry's wake reaches the session through it, and a schedule's prompt run into the live session isn't run yet. R206 binds that run too when it lands. Its new test gives the fallback a login screen and checks that it holds, both with the core's word that the session waits and without it.
 3. **Citations of the old slug.** None remains outside the notes that name it as previous.
 4. **The number.** It goes to the repo owner to confirm, since MIS-0011 is still awaiting his acceptance.
 
