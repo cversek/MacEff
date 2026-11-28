@@ -20,8 +20,6 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
-from macf.pd.interface import AUTH_REMEDY  # what a person does about each wait for authentication (MIS-0002-R19)
-
 CLIENT = "client"
 TMUX = "tmux"
 NONE = "none"
@@ -116,6 +114,7 @@ def _plan_attach(response: Optional[dict], session_unit: str, *,
     # A session that can't log in waits on a person and is kept running (MIS-0002-R19), and
     # attaching to it to run /login is the one way back (persistent_layer 3.2). Waiting on a
     # person is a live state, so attach already reaches it; the login is read from its field.
+    from macf.pd.interface import AUTH_REMEDY  # here, not at the top: the CLI parser must build light
     login = (status.get("auth_failed") or "authentication failed") if status.get("waiting_on") in AUTH_REMEDY else None
     if state not in _LIVE and not login:
         return AttachPlan(NONE, reason=f"the session unit is {state}; no session runs")
@@ -171,6 +170,7 @@ def plan_attach(response: Optional[dict], session_unit: str, **probes) -> Attach
     """
     plan = _plan_attach(response, session_unit, **probes)
     status, _ = _session_unit(response, session_unit)
+    from macf.pd.interface import AUTH_REMEDY  # here, not at the top: the CLI parser must build light
     kind = status.get("waiting_on") if status else None
     login = (status.get("auth_failed") or "authentication failed") if kind in AUTH_REMEDY else None
     if login and plan.kind != NONE:
