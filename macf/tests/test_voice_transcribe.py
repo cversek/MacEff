@@ -26,7 +26,7 @@ def fake_faster_whisper(monkeypatch):
             seg = SimpleNamespace(text=" check the queue", start=0.0, end=1.2, no_speech_prob=0.1)
             return iter([seg]), SimpleNamespace(language="en")
 
-    monkeypatch.setattr(tr, "_faster_whisper_model", lambda model: Model())
+    monkeypatch.setattr(tr, "_faster_whisper_model", lambda model, *device: Model())
     return handed
 
 
@@ -85,7 +85,7 @@ def test_a_silent_last_stretch_transcribes_to_nothing(monkeypatch):
             seg = SimpleNamespace(text=" So, let's get started.", start=0.0, end=5.0, no_speech_prob=0.6)
             return iter([seg] * 12), SimpleNamespace(language="en")
 
-    monkeypatch.setattr(tr, "_faster_whisper_model", lambda model: Model())
+    monkeypatch.setattr(tr, "_faster_whisper_model", lambda model, *device: Model())
     quiet = (np.random.default_rng(1).standard_normal(5 * 16000) * 0.002).astype(np.float32)
     assert tr.transcribe_array(quiet, engine="faster-whisper", initial_prompt="MacEff, Harbor Master").text == ""
 

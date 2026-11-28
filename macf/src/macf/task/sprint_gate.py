@@ -106,6 +106,8 @@ def emit_scope_nag(sprint_task: Any, open_children: list) -> str:
         f"{count} scoped task(s) remaining — complete them to clear the scope gate:\n"
         f"{task_list}\n"
         f"Complete with: macf_tools task complete <id> --report '...'\n"
+        f"Waiting on others or on compute: macf_tools task scope pause <ids> --justification <reason> "
+        f"(plain `task pause` leaves the gate counting the task)\n"
         f"Emergency escape: macf_tools mode set MANUAL_MODE --justification <reason>"
     )
 

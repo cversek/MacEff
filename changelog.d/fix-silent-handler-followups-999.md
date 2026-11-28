@@ -1,0 +1,3 @@
+### Fixed
+
+- **A missing token cache no longer prints three lines, and the statusline no longer swallows real faults** (`utils/tokens.py`, `cli.py` `cmd_statusline`, #999, items 1 and 3): a session has no token cache until the first write, yet the first hook calls printed three warnings about the missing file; a missing cache is now silent and an unreadable one is still said. The statusline's stdin parse caught every exception with the non-JSON case; non-JSON is now its own quiet drop, and any other fault is recorded as a `statusline_stdin_fault` event rather than swallowed, still never on stderr, which a refresh must keep clean. The issue's torn-line item and the memory-recall watch stay open.

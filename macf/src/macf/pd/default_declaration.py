@@ -40,6 +40,9 @@ SESSION_STOP_GRACE_S = 30.0
 #: The variables that name the login a unit runs as. They belong to the unit's account, not its
 #: program, so drift reports them missing whatever command the unit runs (cversek/MacEff#848).
 LOGIN_VARIABLES = ("USER", "LOGNAME")
+#: What a unit without them suffers, said wherever the absence is reported (#1073).
+LOGIN_ENV_EFFECT = ("on macOS a session started without them can't read its stored login (the Keychain entry is "
+                    "found by them), so it reads \"Login expired\" although the account is logged in")
 
 
 def channel_flag(plugin: str, marketplace: str) -> str:
@@ -185,7 +188,13 @@ def drift(existing: Dict[str, Any], default: Dict[str, Any]) -> List[str]:
         stated = mine.get("environment") or {}
         missing = [k for k in wanted if k not in stated]
         if missing:
-            out.append(f"the {unit['name']} unit's environment lacks {', '.join(missing)}")
+            line = f"the {unit['name']} unit's environment lacks {', '.join(missing)}"
+            login = [k for k in missing if k in LOGIN_VARIABLES]
+            if login:
+                values = unit.get("environment") or {}
+                lines = ", ".join(f"{k}={values[k]}" for k in login if k in values)
+                line += f": {LOGIN_ENV_EFFECT}" + (f"; add {lines}" if lines else "")
+            out.append(line)
     declared = {(c.get("plugin"), c.get("marketplace")) for c in existing.get("allowlisted_channels") or []}
     for c in default.get("allowlisted_channels") or []:
         if (c["plugin"], c["marketplace"]) not in declared:

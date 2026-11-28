@@ -66,14 +66,6 @@ def _compaction_lower_bound_iso(session_id: str) -> str:
 
 _DEFAULT_CONTEXT = 200_000
 
-# Known model context windows
-_MODEL_CONTEXT_MAP = {
-    "claude-opus-4-6[1m]": 1_000_000,
-    "claude-opus-4-6": 200_000,
-    "claude-sonnet-4-6": 200_000,
-    "claude-haiku-4-5": 200_000,
-}
-
 
 _1M_WARNING_SHOWN = False
 
@@ -93,6 +85,15 @@ def get_total_context() -> int:
     Returns:
         Total context window in tokens
     """
+    return get_total_context_and_source()[0]
+
+
+def get_total_context_and_source() -> Tuple[int, str]:
+    """The total context window and where it came from: ``env``, ``config`` or ``default``.
+
+    ``default`` means nothing set or detected the window, so 200k is an assumption, not a
+    measurement: an account whose window is larger sees CL levels and boundary warnings fire against
+    the wrong number (#1050). Callers that show the value say so when the source is ``default``."""
     global _1M_WARNING_SHOWN
     from macf.config import resolve_setting
     value, source = resolve_setting(
@@ -102,7 +103,7 @@ def get_total_context() -> int:
         coerce=int,
     )
     if source != "default":
-        return value
+        return value, source
 
     if not _1M_WARNING_SHOWN:
         _1M_WARNING_SHOWN = True
@@ -118,7 +119,12 @@ def get_total_context() -> int:
         except (ImportError, OSError) as e:
             print(f"⚠️ MACF: model detection failed during context window check: {e}", file=sys.stderr)
 
-    return _DEFAULT_CONTEXT
+    return _DEFAULT_CONTEXT, "default"
+
+
+#: What to say beside a context window that is the fallback, not a setting.
+UNVERIFIED_CONTEXT_NOTE = ("an assumed default, not read from your account: if its window is larger, set "
+                           "context.window in .maceff/config.json or MACF_CONTEXT_WINDOW")
 
 
 # Backward compatibility alias
@@ -230,12 +236,15 @@ def get_token_info(session_id: Optional[str] = None) -> Dict[str, Any]:
 
         if sidecar_dir:
             cache_path = sidecar_dir / "token_cache.json"
-            try:
-                cache_data = read_json(cache_path)
-                if cache_data and cache_data.get("session_id") == session_id:
-                    cached_max = cache_data.get("max_tokens_used", 0)
-            except (FileNotFoundError, OSError, json.JSONDecodeError) as e:
-                print(f"⚠️ MACF: token cache {cache_path.name} unreadable (cached maximum taken as 0): {e}", file=sys.stderr)
+            # A session has no cache until the first write, so a missing one is the normal case on
+            # the first hook calls: nothing to say (#999). One that is there and can't be read is said.
+            if cache_path.exists():
+                try:
+                    cache_data = read_json(cache_path)
+                    if cache_data and cache_data.get("session_id") == session_id:
+                        cached_max = cache_data.get("max_tokens_used", 0)
+                except (FileNotFoundError, OSError, json.JSONDecodeError) as e:
+                    print(f"⚠️ MACF: token cache {cache_path.name} unreadable (cached maximum taken as 0): {e}", file=sys.stderr)
 
         jsonl_path = get_session_transcript_path(session_id)
 
@@ -476,9 +485,11 @@ def format_token_context_full(token_info: Dict[str, Any]) -> str:
     """
     cluac = token_info['cl_level']
     weather = get_cluac_weather(cluac)
+    total, source = get_total_context_and_source()
+    assumed = " (assumed default: not read from your account)" if source == "default" else ""
     return f"""📊 TOKEN/CONTEXT AWARENESS
 {weather}
-Tokens Used: {token_info['tokens_used']:,} / {get_total_context():,}
+Tokens Used: {token_info['tokens_used']:,} / {total:,}{assumed}
 CL Level: {cluac} ({token_info['percentage_used']:.1f}% used)
 Remaining: {token_info['tokens_remaining']:,} tokens"""
 

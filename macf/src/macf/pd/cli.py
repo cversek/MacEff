@@ -1,10 +1,11 @@
 """``macf_tools pd``: the agent's primal daemon, from the command line.
 
 ``status`` reads; ``install`` and ``uninstall`` put the daemon under this platform's service
-manager and take it out. Starting, stopping and restarting a unit over the control socket
-must name who asks (MIS-0002-R52 (control_act_MUST_name_who_asked)), and which asker a
-command line typed in a session claims is still an open question, so no unit act is here.
-``wake`` paces the keystroke wake, which acts on no unit: it is asked by the agent, or by the
+manager and take it out. ``unit`` starts, stops or restarts one declared unit over the control
+socket, naming who asks (MIS-0002-R52 (control_act_MUST_name_who_asked)): the agent when the
+command runs inside a Claude Code session (``CLAUDE_PID`` is set), the operator when it
+doesn't, and ``--asked-by`` says otherwise. The asker is an attribution beside the process the
+socket observed, never an authentication (persistent_layer 11.3). ``wake`` paces the keystroke wake, which acts on no unit: it is asked by the agent, or by the
 operator with ``--asked-by operator`` (persistent_layer 6.9).
 """
 import argparse
@@ -64,6 +65,10 @@ def add_pd_parser(sub) -> None:
                       "exit 0 ok, 1 expiring or expired, 2 unknown (#884)")
     login.add_argument("--json", action="store_true", help="print the verdict as JSON")
     login.set_defaults(func=cmd_pd_login)
+    report = pd_sub.add_parser(
+        "report", help="the report a declared report time wakes the session with: today, the login line "
+                       "(#1027; persistent_layer)")
+    report.set_defaults(func=cmd_pd_report)
     entry = pd_sub.add_parser(
         "entry", help="your own timed entries, made from your live session (policy: persistent_layer)")
     entry_sub = entry.add_subparsers(dest="entry_cmd")
@@ -104,6 +109,28 @@ def add_pd_parser(sub) -> None:
     lst = entry_sub.add_parser("list", help="the entries you hold")
     lst.add_argument("--json", action="store_true", help="print them as JSON")
     lst.set_defaults(func=cmd_pd_entry_list)
+    unit = pd_sub.add_parser(
+        "unit", help="start, stop or restart one declared unit, and say the state it reached "
+                     "(persistent_layer 1.4)")
+    unit_sub = unit.add_subparsers(dest="unit_act")
+    for act, what in (("start", "start a unit that isn't running"),
+                      ("stop", "stop a unit now; it is not started again by a daemon restart "
+                               "when the operator asked for the stop"),
+                      ("restart", "restart a unit; one that waits for a quiet window says so")):
+        p = unit_sub.add_parser(act, help=what)
+        p.add_argument("name", help="a unit of this agent's declaration")
+        p.add_argument("--reason", required=True, help="why; recorded with the act")
+        p.add_argument("--asked-by", choices=("agent", "operator"), default=None,
+                       help="who asks (default: the agent inside a Claude Code session, "
+                            "the operator outside one)")
+        p.add_argument("--wait", type=float, default=30.0, metavar="SECONDS",
+                       help="how long to wait for the unit to reach the state the act asks for "
+                            "(default 30)")
+        if act == "restart":
+            p.add_argument("--server", action="store_true",
+                           help="restart the session unit's tmux server even with a client attached, which "
+                                "ends the client (without it, such a restart refuses)")
+        p.set_defaults(func=cmd_pd_unit)
     agenda = pd_sub.add_parser(
         "agenda", help="what is scheduled: the declared schedules' next runs and your own entries")
     agenda.set_defaults(func=cmd_pd_agenda)
@@ -155,13 +182,57 @@ def cmd_pd_login(args: argparse.Namespace) -> int:
     """The login verdict for the account running this command; a deployment runs it as a seat's
     own user to check that seat from outside. Reads only the two expiry dates."""
     import json
-    from macf.pd.login import read_assessment
-    verdict = read_assessment()
+    from macf.pd.login import EXPIRING_S, read_assessment
+    expiring_s = EXPIRING_S
+    try:                      # the declaration's warning window, when this home has one that reads (#1027)
+        home, card = _this_agent()
+        from macf.pd.core import load_declaration
+        from macf.pd.login import warn_seconds
+        expiring_s = warn_seconds(load_declaration(home, card))
+    except Exception as e:  # noqa: BLE001 - a seat with no readable declaration still gets its verdict, by the default window
+        print(f"⚠️ MACF: pd login: no declaration read, so the default warning window applies: {type(e).__name__}",
+              file=sys.stderr)
+    verdict = read_assessment(expiring_s=expiring_s)
     if getattr(args, "json", False):
         print(json.dumps(verdict))
     else:
         print(f"login: {verdict['state']}, {verdict['detail']}")
     return {"ok": 0, "expiring": 1, "expired": 1}.get(str(verdict["state"]), 2)
+
+
+def cmd_pd_report(args: argparse.Namespace) -> int:
+    """The report a declared report time runs (#1027): what it prints is what the session is woken
+    with. Today that is the login line, from the reporter's own stored credential. Exit 0 once it has
+    printed; a declaration that can't be read is the one failure, said on stderr."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from macf.pd import core, login
+    home, card = _this_agent()
+    try:
+        declaration = core.load_declaration(home, card)
+    except Exception as e:  # noqa: BLE001 - said, and the run's exit records it
+        print(f"⚠️ MACF: pd report: the declaration can't be read, so there is no report: {e}", file=sys.stderr)
+        return 1
+    reports = declaration.reports
+    reporter = reports.reporter if reports and reports.reporter else card
+    if reporter != card:
+        # Agents on one account share one login, so one of them reports it and the rest say who.
+        print(f"login: reported by {reporter}")
+        return 0
+    verdict = login.read_assessment(expiring_s=login.warn_seconds(declaration))
+    state, detail, ends = verdict.get("state"), verdict.get("detail"), verdict.get("refresh_expires_at")
+    reach = f"(macf_tools harness attach --card {card})"
+    if state == "ok" and isinstance(ends, (int, float)):
+        when = datetime.fromtimestamp(ends, ZoneInfo(declaration.timezone or "UTC"))
+        print(f"login: good until {when.strftime('%a %Y-%m-%d')}")
+    elif state == "expiring":
+        print(f"login: {detail}: run /login in the session before then {reach}")
+    elif state == "expired":
+        print(f"login: {detail}: run /login in the session {reach}")
+    else:
+        print(f"login: can't be judged: {detail}")
+    return 0
 
 
 def cmd_pd_alive(args: argparse.Namespace) -> int:
@@ -308,6 +379,72 @@ def _seconds(text: str) -> float:
     return value
 
 
+#: The state each act asks for. A restart is judged by a new process too, since the old one may
+#: still read running for a moment after the act is asked.
+_UNIT_WANTED = {"start": ("running", "waiting_on_a_person"), "stop": ("stopped",),
+                "restart": ("running", "waiting_on_a_person")}
+
+
+def cmd_pd_unit(args: argparse.Namespace) -> int:
+    """0 when the unit reached the state the act asks for; 1 when the daemon refused, could not be
+    reached, or the unit hadn't reached it within --wait (cversek/MacEff#1007)."""
+    from macf.pd.client import DaemonUnavailable, ask
+    from macf.pd.core import POLICY_POINTER, DeclarationRefused
+
+    try:
+        _, card = _this_agent()
+    except DeclarationRefused as e:
+        print(f"maceff_pd: {e}\n{POLICY_POINTER}", file=sys.stderr)
+        return 1
+
+    def units():
+        reply = ask(card, {"op": "status"})
+        return reply, {u.unit: u for u in reply.units or []}
+
+    try:
+        reply, before = units()
+        if not reply.ok:
+            print(f"maceff_pd: {card}: refused: {reply.error}", file=sys.stderr)
+            return 1
+        if args.name not in before:
+            print(f"maceff_pd: {card} has no unit {args.name!r}; its units are: "
+                  f"{', '.join(sorted(before)) or 'none'}", file=sys.stderr)
+            return 1
+        asked_by = args.asked_by or ("agent" if os.environ.get("CLAUDE_PID") else "operator")
+        asker = {"kind": asked_by, **({"card": card} if asked_by == "agent" else {})}
+        request = {"op": args.unit_act, "unit": args.name, "asked_by": asker, "reason": args.reason}
+        if getattr(args, "server", False):
+            request["server"] = True
+        reply = ask(card, request)
+        if not reply.ok:
+            print(f"maceff_pd: {card}: refused: {reply.error}", file=sys.stderr)
+            return 1
+        old_pid = before[args.name].pid
+        deadline = time.monotonic() + max(0.0, args.wait)
+        while True:
+            reply, now = units()
+            unit = now.get(args.name)
+            if unit is not None and unit.restart_held_until:
+                print(f"{args.name}: the restart waits for the quiet window that ends at "
+                      f"{unit.restart_held_until}; it has not happened yet")
+                return 0
+            if unit is not None and unit.state in _UNIT_WANTED[args.unit_act] and \
+                    (args.unit_act != "restart" or unit.pid != old_pid):
+                print(f"{args.name}: {unit.state}" + (f" (pid {unit.pid})" if unit.pid else ""))
+                return 0
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.5)
+    except DaemonUnavailable as e:
+        print(f"maceff_pd: {card}: {e}", file=sys.stderr)
+        return 1
+    state = unit.state if unit is not None else "unknown"
+    print(f"maceff_pd: {args.name} read {state} after {args.wait:g} s, not the state {args.unit_act} "
+          f"asks for ({' or '.join(_UNIT_WANTED[args.unit_act])}); `macf_tools pd status` shows where it is",
+          file=sys.stderr)
+    return 1
+
+
 def cmd_pd_wake(args: argparse.Namespace) -> int:
     """0 when shown or paced; 1 when the daemon refused, could not be reached, or has no wake."""
     from macf.pd.client import DaemonUnavailable, ask
@@ -395,6 +532,12 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
                   f"this command {report.cli_build}. If this command's is the one you mean, {UPDATE_HINT}")
         else:
             print(f"  build: {report.daemon_build}, the same as this command")
+    try:
+        from macf.pd.core import load_declaration
+        declared = {u.name: u for u in load_declaration(home, card).units}
+    except Exception as e:  # noqa: BLE001 - the status reads without a declaration; only the login hint needs it
+        declared = {}
+        print(f"  ⚠️ the declaration did not read, so no login-environment hint: {type(e).__name__}", file=sys.stderr)
     for unit in report.units:
         line = f"  {unit['unit']}: {unit.get('state') or 'no state recorded'}"
         if unit.get("pid"):
@@ -405,9 +548,15 @@ def cmd_pd_status(args: argparse.Namespace) -> int:
         if unit.get("microphone"):
             from macf.voice.cli import Reading, describe
             line += f"; microphone: {describe(Reading(unit['microphone']))}"
-        if unit.get("auth_failed"):
-            # Held failed for its login and still running: the way back is a person's /login (#1015)
-            line += f"; can't log in ({unit['auth_failed']}): attach and run /login"
+        from macf.pd.interface import AUTH_REMEDY  # here, not at the top: the parser must build light
+        if unit.get("waiting_on") in AUTH_REMEDY:
+            # Waiting on its authentication and still running: the way back is a person (MIS-0002-R19)
+            line += (f": {unit['waiting_on']} ({unit.get('auth_failed') or 'authentication failed'}), "
+                     f"{AUTH_REMEDY[unit['waiting_on']]}")
+            from macf.pd.login import missing_login_env
+            cause = missing_login_env(declared.get(unit["unit"]))
+            if cause:
+                line += f"\n    probable cause: {cause}"
         if "liveness" in unit:
             line += f"; liveness {unit['liveness']}: {unit['detail']}"
         print(line)
@@ -764,17 +913,28 @@ def daemon_macf(python: str, modules: Tuple[str, ...] = ("macf.pd",)) -> Tuple[O
 
 def cmd_pd_install(args: argparse.Namespace) -> int:
     from macf.pd import adapter as adapters
-    from macf.pd.core import POLICY_POINTER, DeclarationRefused, cutover_declaration, load_declaration
+    from macf.pd.core import (POLICY_POINTER, DeclarationRefused, cutover_declaration, cutover_pending,
+                              load_declaration)
+    from macf.pd.interface import Declaration
 
     from macf.pd import allowlist
 
     try:
         home, card = _this_agent()
-        kept = cutover_declaration(home, card)
-        if kept is not None:
-            print(f"maceff_pd: the declaration named {card} in the old form; rewritten in place, "
-                  f"the original kept at {kept} (MIS-0002-R165)")
-        declaration = load_declaration(home, card)
+        pending = cutover_pending(home, card) if args.plan else None
+        if pending is not None:
+            # --plan changes nothing, so it says what the next start would do and reads the file as
+            # that start would leave it, without writing it (#919).
+            print(f"maceff_pd: the declaration names {card} in the old form; --plan leaves it as it is. "
+                  f"The next start rewrites it in place and keeps the original at {pending.kept} "
+                  f"(MIS-0002-R165)")
+            declaration = Declaration.model_validate_json(pending.rewritten)
+        else:
+            kept = cutover_declaration(home, card)
+            if kept is not None:
+                print(f"maceff_pd: the declaration named {card} in the old form; rewritten in place, "
+                      f"the original kept at {kept} (MIS-0002-R165)")
+            declaration = load_declaration(home, card)
         tier = adapters.adapter_for(sys.platform)
     except (DeclarationRefused, LookupError) as e:
         print(f"maceff_pd: nothing installed: {e}\n{POLICY_POINTER}", file=sys.stderr)

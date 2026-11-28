@@ -18,6 +18,7 @@ A unit's liveness also says what it has in hand, ``in_flight``, which a restart 
 person can give, ``waiting_on`` (MIS-0002-R21 (pd_MUST_report_waiting_on_person)). A
 unit that reports no work in flight is taken as idle, and its restart says so.
 """
+import hashlib
 import json
 import os
 import pwd
@@ -28,7 +29,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
@@ -37,11 +38,13 @@ from macf.agent_events_log import append_event, get_log_path, read_events
 from macf.notify.session import proc_start, proc_start_key, verify_incarnation
 from macf.pd.interface import (
     AUTH_FAILED_REASON,
+    auth_wait,
     EVENT_CONTROL,
     EVENT_OVER_LIMIT,
     EVENT_UNDER_LIMIT,
     EVENT_DAEMON_START,
     EVENT_LIVENESS,
+    EVENT_SESSION_PANE,
     EVENT_STATE,
     Asker,
     Control,
@@ -57,7 +60,7 @@ from macf.pd.interface import (
     declaration_path,
     render,
 )
-from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_UNIT
+from macf.pd.liveness import ENV_HOME, ENV_INTERVAL, ENV_LAUNCH, ENV_UNIT
 from macf.pd.names import rendered_declaration_problem
 from macf.pd.schedule import CronExpr, check_window
 from macf import calling_card
@@ -131,6 +134,10 @@ HARNESS = Asker(kind="harness")
 EVENT_HARNESS_COMPACTION = "harness_compaction_detected"
 
 
+class RestartRefused(ValueError):
+    """A restart the daemon won't carry out as asked, with what to ask instead (#1055)."""
+
+
 class DeclarationRefused(ValueError):
     """The declaration cannot be used. Nothing is started: a refusal installs nothing."""
 
@@ -139,20 +146,36 @@ class DeclarationRefused(ValueError):
 CUTOVER_KEPT_SUFFIX = ".pre-card-underscore"
 
 
-def cutover_declaration(agent_home: Path, card: str) -> Optional[Path]:
-    """Rewrite a host declaration that names this home's own card in the old ``Name@shortid``
-    form, once, in place, before it is read; the path of the kept original, or None when
-    nothing was rewritten.
+@dataclass(frozen=True)
+class CutoverPending:
+    """What the card cut-over would do to one declaration file: the file, its text now, the old
+    card it names, the text rewritten to the new form, and where the original would be kept."""
+    path: Path
+    text: str
+    old: str
+    rewritten: str
+    kept: Path
+
+
+def cutover_pending(agent_home: Path, card: str, *, path: Optional[Path] = None) -> Optional[CutoverPending]:
+    """The rewrite the cut-over would make to a host declaration that names this home's own card
+    in the old ``Name@shortid`` form, or None when it has nothing to do. Nothing is written.
+
+    *path* names the file: the agent's own declaration by default, or its staged copy
+    (``declaration.json.cutover``) that a move installs from (#919).
 
     A host daemon that restarts onto code refusing the old form (MIS-0002-R165) would exit and
     stay down, and its restart doesn't wait for a person to edit the file. Only the agent's own
     file is rewritten, and only when its old card maps to this home's card (R166); a rendered
     declaration is the deployment's, re-rendered in the new form at start. Every quoted
     occurrence of the old card changes, schedule targets included. The result must validate, or
-    nothing is written. After it, only the new form is ever read."""
-    path = declaration_path(agent_home)
-    if path != Path(agent_home) / ".maceff" / "pd" / "declaration.json":
+    there is nothing to do."""
+    own = declaration_path(agent_home)
+    if own != Path(agent_home) / ".maceff" / "pd" / "declaration.json":
         return None
+    path = own if path is None else path
+    if path.parent != own.parent or path.name not in (own.name, own.name + ".cutover"):
+        return None     # noqa: MACEFF003 - only the agent's own declaration and its staged copy are cut over
     try:
         text = path.read_text()
         old = json.loads(text).get("agent")
@@ -167,18 +190,27 @@ def cutover_declaration(agent_home: Path, card: str) -> Optional[Path]:
         Declaration.model_validate_json(rewritten)
     except ValidationError:
         return None     # noqa: MACEFF003 - left as it was: load_declaration refuses it with the reason
-    mode = path.stat().st_mode & 0o7777
-    kept = path.with_name(path.name + CUTOVER_KEPT_SUFFIX)
-    if not kept.exists():
-        kept.write_text(text)
-        kept.chmod(mode)
-    staged = path.with_name(path.name + ".rewriting")
-    staged.write_text(rewritten)
+    return CutoverPending(path, text, old, rewritten, path.with_name(path.name + CUTOVER_KEPT_SUFFIX))
+
+
+def cutover_declaration(agent_home: Path, card: str, *, path: Optional[Path] = None) -> Optional[Path]:
+    """Make the rewrite ``cutover_pending`` describes, once, in place, before the file is read;
+    the path of the kept original, or None when nothing was rewritten. The original is kept
+    beside it, and the rewrite is recorded as ``pd_declaration_rewritten``."""
+    pending = cutover_pending(agent_home, card, path=path)
+    if pending is None:
+        return None
+    mode = pending.path.stat().st_mode & 0o7777
+    if not pending.kept.exists():
+        pending.kept.write_text(pending.text)
+        pending.kept.chmod(mode)
+    staged = pending.path.with_name(pending.path.name + ".rewriting")
+    staged.write_text(pending.rewritten)
     staged.chmod(mode)
-    os.replace(staged, path)
-    append_event("pd_declaration_rewritten", {"agent": card, "from": old, "path": str(path),
-                                              "kept": str(kept), "reason": "MIS-0002-R165 cut-over"})
-    return kept
+    os.replace(staged, pending.path)
+    append_event("pd_declaration_rewritten", {"agent": card, "from": pending.old, "path": str(pending.path),
+                                              "kept": str(pending.kept), "reason": "MIS-0002-R165 cut-over"})
+    return pending.kept
 
 
 def load_declaration(agent_home: Path, card: str) -> Declaration:
@@ -267,6 +299,17 @@ def quiet_window_at(declaration: Declaration, at: float):
     return None
 
 
+#: How long past the wrapper's worst case the daemon waits for a pane's announcement, for the respawn itself.
+PANE_RESPAWN_MARGIN_S = 5.0
+
+
+def launch_digest(command: Sequence[str], env: Mapping[str, str]) -> str:
+    """A short digest of what a unit is launched with, the command and the environment, so a
+    wrapper can say it back and the daemon can tell whether a changed declaration has reached it."""
+    body = json.dumps([list(command), {k: v for k, v in sorted(env.items()) if k != ENV_LAUNCH}])
+    return hashlib.sha256(body.encode()).hexdigest()[:16]
+
+
 def backoff_s(failures: int, base: float = BACKOFF_BASE_S, cap: float = BACKOFF_CAP_S) -> float:
     """The wait before restarting a unit after its ``failures``-th consecutive failure."""
     if failures < 1:
@@ -285,6 +328,10 @@ EXIT_NOT_SEEN = -1000
 
 #: Unit states with a process behind them, which a restarted daemon may adopt.
 LIVE_STATES = ("starting", "running", "waiting_on_a_person")
+#: How often a session still waiting on its login, and still beating, has that state recorded again.
+#: The outside watch reads state within a 7-day lookback and liveness more often, so a login wait
+#: recorded once and then rotated away, or older than the lookback, would read healthy (#896).
+LOGIN_WAIT_RERECORD_S = 24 * 3600.0
 
 #: How often the core reads what an adopted session waits on, which no beat carries (R21).
 DIALOG_POLL_S = 5.0
@@ -486,6 +533,7 @@ class _Runner:
     in_flight: Optional[int] = None     # as the unit last reported it; None if it never has
     microphone: Optional[MicrophoneState] = None # a capture unit's microphone, as its last credited beat said (MIS-0008 R16)
     auth_failed: Optional[str] = None   # what the harness said while it can't authenticate (R19)
+    rerecorded_at: float = 0.0          # wall time of the last repeat of a still-failed state (#896)
     failures: int = 0
     want_up: bool = False               # whether the unit should be running
     restart_at: Optional[float] = None  # monotonic: a restart under its policy is due
@@ -493,7 +541,7 @@ class _Runner:
     stopping: Optional[str] = None      # why a stop is under way, until the exit is reaped
     then_start: bool = False            # the stop under way is half of a restart
     drain: Optional[tuple] = None       # (asker, reason, deadline) of a restart waiting on R49
-    held_restart: Optional[tuple] = None  # (asker, reason, peer) of an asked restart a quiet window holds (R50)
+    held_restart: Optional[tuple] = None  # (asker, reason, peer, server) of an asked restart a quiet window holds (R50)
     client_session: Optional[str] = None  # session id, when the client's own daemon hosts this session (R66)
     dialogs_at: float = float("-inf")   # monotonic time an adopted session's dialogs were last read (R21)
     awaiting_respawn: Optional[float] = None  # monotonic deadline for a respawned worker to be listed
@@ -506,6 +554,12 @@ class _Runner:
     own: List[tuple] = field(default_factory=list)  # (pid, proc_start) of each process started or adopted for it
     held_by: Optional[List[int]] = None  # a session unit not started: the hand-started clients beside it ([] when they couldn't be listed)
     held_check_at: float = 0.0          # monotonic: when a held session unit looks again
+    pane_announced: Optional[tuple] = None   # (pid, start) of a session wrapper that said it can respawn in place (#726)
+    pane_respawns_seen: int = 0         # the respawns that wrapper has announced
+    pane_lookup: Optional[tuple] = None  # (pid, start) whose announcement was looked for in the log, once
+    pane_launch: Optional[str] = None   # what that wrapper said it was launched with (ENV_LAUNCH)
+    pane_respawn_due: Optional[float] = None  # monotonic: a restart in the pane asked, owed by then
+    pane_respawn_reason: Optional[str] = None
 
 
 @dataclass
@@ -528,7 +582,7 @@ class _LogTail:
     credited: liveness that cannot be read is unknown, and unknown is not alive.
     """
 
-    def __init__(self, path: Path, kinds=(EVENT_LIVENESS, EVENT_HARNESS_COMPACTION, EVENT_COMPACTION)):
+    def __init__(self, path: Path, kinds=(EVENT_LIVENESS, EVENT_HARNESS_COMPACTION, EVENT_COMPACTION, EVENT_SESSION_PANE)):
         self.path = path
         self.kinds = tuple(kinds)
         self._needles = tuple(k.encode() for k in self.kinds)
@@ -646,6 +700,9 @@ class Core:
     ):
         self.declaration = declaration
         self.card = card
+        #: How many tmux clients are attached to the session unit's server; replaced in tests (#1055).
+        from macf.pd.session_unit import attached_clients
+        self.attached_clients: Callable[[str], int] = attached_clients
         self._clock = clock
         self._wall = wall
         self._backoff = (backoff_base_s, backoff_cap_s)
@@ -725,6 +782,8 @@ class Core:
                            proc_start=r.proc_start if r.proc else None, since=r.since,
                            restart_held_until=self._restart_held_until(r),
                            microphone=r.microphone if r.proc else None,
+                           waiting_on=auth_wait(r.auth_failed) if r.proc and r.auth_failed is not None
+                           and r.state == "waiting_on_a_person" else None,
                            auth_failed=r.auth_failed if r.proc else None)
                 for r in self._units.values()]
 
@@ -753,8 +812,16 @@ class Core:
         (optional_unit_MUST-NOT_delay_others)). A unit the previous daemon started that is
         still running is adopted, not started again."""
         carried = self._adopt_survivors()
+        held = self._held_by_operator({n for n, r in self._units.items()
+                                       if n not in carried and not r.spec.optional})
         for r in self._units.values():
             if r.spec.name in carried:
+                continue
+            if r.spec.name in held:
+                # The operator stopped it and nobody has started it since. A restart the operator
+                # didn't ask for doesn't undo that (#1009): only an explicit start clears the hold.
+                self._transition(r, "stopped", f"held down by the operator since "
+                                               f"{self._since(held[r.spec.name])}; start it to clear")
                 continue
             if not r.spec.optional:
                 self._control("start", r, POLICY, "declared and not optional")
@@ -764,8 +831,43 @@ class Core:
             # A first start carries nothing, so only a restart is reported (R47).
             changed = {n for n in self._previously_live - carried if self._units[n].state in LIVE_STATES}
             self._report_carried("daemon", "the primal daemon restarted", carried, changed,
-                                 self._previously_live - carried - changed)
+                                 self._previously_live - carried - changed - set(held),
+                                 held={n: self._since(t) for n, t in sorted(held.items())})
         self._recover_compaction()
+
+    def _held_by_operator(self, candidates: set) -> Dict[str, Optional[float]]:
+        """The units an operator stopped that no start has followed since, with when (#1009).
+
+        Folded from the event log, newest first: a unit's last start, stop or restart decides it,
+        and it is held when that was a stop the operator asked for. A stop the agent or the
+        wind-down asked, and one the daemon made on its own, is not held. Only a candidate is
+        looked up, so the scan ends once each has been decided; a unit with no act on record
+        reads the log to its start, once, at the boot that first sees it.
+        """
+        held: Dict[str, Optional[float]] = {}
+        if not candidates:
+            return held
+        decided: set = set()
+        for event in read_events(reverse=True, scope="all", only=(EVENT_CONTROL,)):
+            data = event.get("data") or {}
+            unit = data.get("unit")
+            if unit not in candidates or unit in decided or data.get("act") not in ("start", "stop", "restart"):
+                continue
+            if not calling_card.is_agent(data.get("agent"), self.card):
+                continue
+            decided.add(unit)
+            if data.get("act") == "stop" and (data.get("asked_by") or {}).get("kind") == "operator":
+                held[unit] = _float_or_none(event.get("timestamp"))
+            if len(decided) == len(candidates):
+                break
+        return held
+
+    @staticmethod
+    def _since(timestamp: Optional[float]) -> str:
+        """When a hold began, as the date and time a reader can place, or "an earlier time"."""
+        if timestamp is None:
+            return "an earlier time"
+        return datetime.fromtimestamp(timestamp).astimezone().strftime("%Y-%m-%d %H:%M %Z")
 
     def _recover_compaction(self) -> None:
         """A compaction this daemon's tail can't see, made while no daemon ran or inside the
@@ -827,8 +929,10 @@ class Core:
         self._previously_live = {n for n, d in last.items() if d.get("state") in LIVE_STATES}
         for name, data in last.items():
             pid, start = data.get("pid"), data.get("proc_start")
-            # A session that can't authenticate reads failed but is still running, waiting for
-            # a person to log in (MIS-0002-R19), so it is adopted like a live one.
+            # A session waiting on its login is live and adopted as any waiting unit is (R19).
+            # A build before that amendment recorded the same session as failed with this
+            # reason; a seat whose wait spans the upgrade still runs it, so it is adopted too,
+            # and its next beat records the wait in the new form.
             held = data.get("state") == "failed" and str(data.get("reason", "")).startswith(AUTH_FAILED_REASON)
             if (data.get("state") not in LIVE_STATES and not held) or not pid or not start:
                 continue
@@ -867,6 +971,11 @@ class Core:
         if r.proc is None:
             self._spawn(r)
 
+    def is_session(self, unit: str) -> bool:
+        """Whether *unit* is the declared session unit; False for any other, and for one not declared."""
+        r = self._units.get(unit)
+        return r is not None and r.spec.kind == "session"
+
     def state_of(self, unit: str) -> Optional[str]:
         """A declared unit's state now; None for a unit not declared."""
         r = self._units.get(unit)
@@ -900,6 +1009,7 @@ class Core:
         r.then_start = False
         r.held_restart = None  # a stop also ends a restart a quiet window was holding
         r.held_by = None       # and a session unit held beside a hand-started client
+        r.pane_respawn_due = r.pane_respawn_reason = None  # a stop outranks a restart in the pane
         if r.proc is not None:
             self._signal_stop(r, f"stopped as asked: {reason}")
         elif r.remnant is not None:
@@ -912,15 +1022,27 @@ class Core:
                 if r.awaiting_respawn is not None else ""
             self._transition(r, "stopped", f"stopped as asked: {reason}{caught}")
 
-    def restart(self, unit: str, asked_by: Asker, reason: str, peer: Optional[Peer] = None) -> None:
+    def restart(self, unit: str, asked_by: Asker, reason: str, peer: Optional[Peer] = None,
+                server: bool = False) -> None:
         """Restart a unit, once its work in flight has drained or the drain has timed
-        out (MIS-0002-R49 (pd_MUST_check_work_in_flight))."""
+        out (MIS-0002-R49 (pd_MUST_check_work_in_flight)).
+
+        A restart of the session unit that would end its tmux server, because the wrapper can't restart
+        the session in its pane, ends every terminal attached to it too, so it refuses while a client is
+        attached unless ``server`` asks for exactly that (#1055)."""
         r = self._runner(unit)
+        if r.spec.kind == "session" and r.proc is not None and not server and not self._can_restart_in_pane(r):
+            attached = self.attached_clients(self.card)
+            if attached:
+                raise RestartRefused(
+                    f"restarting {unit!r} would end its tmux server, and {attached} client"
+                    f"{'s' if attached != 1 else ''} attached to it would end too. Ask with --server to restart "
+                    f"the server anyway, or detach first")
         window = quiet_window_at(self.declaration, self._wall()) if r.spec.kind == "session" else None
         if window is not None:
             # Recorded now and carried out when the window ends (R50); a stop never waits (R48).
             self._control("restart", r, asked_by, f"{reason} (held: quiet window until {window.end})", peer)
-            r.held_restart = (asked_by, reason, peer)
+            r.held_restart = (asked_by, reason, peer, server)
             return
         self._control("restart", r, asked_by, reason, peer)
         r.want_up = True
@@ -988,6 +1110,8 @@ class Core:
         for event in self._tail.read():
             if event.get("event") == EVENT_HARNESS_COMPACTION:
                 self._on_harness_compaction(event)
+            elif event.get("event") == EVENT_SESSION_PANE:
+                self._on_session_pane(event)
             elif event.get("event") == EVENT_COMPACTION:
                 self._compacted_at = _float_or_none(event.get("timestamp")) or self._wall()
             else:
@@ -1018,10 +1142,16 @@ class Core:
             self._await_respawn(r, now)
             return
         if r.held_restart is not None and quiet_window_at(self.declaration, self._wall()) is None:
-            asked_by, reason, peer = r.held_restart
+            asked_by, reason, peer, server = r.held_restart
             r.held_restart = None
-            # The asked act itself, by its asker and the process that asked (R52).
-            self.restart(r.spec.name, asked_by, f"{reason} (held until a quiet window ended)", peer=peer)
+            # The asked act itself, by its asker and the process that asked (R52), with what the ask said.
+            try:
+                self.restart(r.spec.name, asked_by, f"{reason} (held until a quiet window ended)", peer=peer,
+                             server=server)
+            except RestartRefused as e:
+                # The client that attached while it waited is why: the asker is told by the record, not
+                # by a stderr line that nobody reads (#1068).
+                self._control("restart", r, asked_by, f"refused when the quiet window ended: {e}", peer)
             return
         if r.proc is not None:
             code = r.proc.poll()
@@ -1040,6 +1170,11 @@ class Core:
                     return
                 self._kill(r, signal.SIGKILL)
                 r.kill_at = None
+                return
+            if r.pane_respawn_due is not None and now >= r.pane_respawn_due:
+                reason, r.pane_respawn_due, r.pane_respawn_reason = r.pane_respawn_reason, None, None
+                self._signal_stop(r, f"stopped to restart: {reason} (it did not restart in its pane within "
+                                     f"{r.spec.stop_grace_s:g} s, so the unit restarts whole)")
                 return
             if r.stopping is None:
                 self._check_liveness(r, now)
@@ -1069,9 +1204,31 @@ class Core:
                           f"restart policy {r.spec.restart} after failure {r.failures}")
             self._spawn(r)
 
+    def _rerecord_login_wait(self, r: _Runner) -> None:
+        """Say again, once a day, that a session still running waits on its login (#896).
+
+        State events are rare and liveness events frequent: a unit that runs steadily writes no
+        state event, so the one that says it waits on its login can be rotated into an archive, or
+        be older than the outside watch's lookback, while the process keeps beating. The watch
+        would then read it healthy. The repeat keeps the newest record inside the lookback for as
+        long as the wait lasts. It is the same state and the same process, so nothing changes for
+        any reader but the one that was missing it; ``since`` says how long it has lasted."""
+        now = self._wall()
+        if now - max(r.since, r.rerecorded_at) < LOGIN_WAIT_RERECORD_S:
+            return
+        r.rerecorded_at = now
+        began = datetime.fromtimestamp(r.since).astimezone().strftime("%Y-%m-%d %H:%M %Z")
+        self._emit(EVENT_STATE, UnitState(
+            agent=self.card, unit=r.spec.name, state="waiting_on_a_person", pid=r.pid,
+            proc_start=r.proc_start, waiting_on=auth_wait(r.auth_failed),
+            reason=f"{AUTH_FAILED_REASON}: {r.auth_failed} (still waiting; first recorded {began})",
+            boot_id=self._boot_id, since=r.since,
+        ).model_dump())
+
     def _check_liveness(self, r: _Runner, now: float) -> None:
-        if r.state == "waiting_on_a_person":
-            # Silence while a person is awaited is not death, and waiting is never a
+        login_wait = r.state == "waiting_on_a_person" and r.auth_failed is not None
+        if r.state == "waiting_on_a_person" and not login_wait:
+            # Silence while a person answers a prompt is not death, and waiting is never a
             # reason to restart (MIS-0002-R22 (layer_MUST-NOT_restart_waiting_unit)).
             return
         if r.state == "starting":
@@ -1079,9 +1236,11 @@ class Core:
             if now - r.started_at > bound:
                 self._fail(r, f"no liveness from pid {r.pid} within {bound:g} s of its start")
             return
-        held = r.state == "failed" and r.auth_failed is not None
-        if (r.state == "running" or held) and r.alive_at is not None:
-            # A session failed for its login still beats; if the beat stops too, it has died.
+        if login_wait:
+            self._rerecord_login_wait(r)
+        if (r.state == "running" or login_wait) and r.alive_at is not None:
+            # A session waiting on its login still beats, unlike one at a prompt, whose client
+            # blocks; so if its beat stops too, it has died, and waiting doesn't excuse that.
             interval = r.alive_interval_s or r.spec.liveness_interval_s
             bound = LIVENESS_TOLERANCE * interval
             age = now - r.alive_at
@@ -1135,12 +1294,15 @@ class Core:
         r.microphone = live.microphone
         if live.auth_failed:
             # The harness can't authenticate. The session is running but can't work, and that
-            # must never read as idle (MIS-0002-R19 (auth_failure_MUST_read_failed)). It is not
-            # stopped or restarted: a restart can't log in, and a restarted session that is
-            # never prompted makes no request, so it would read healthy again while it can't.
-            if r.auth_failed is None or r.state != "failed":
+            # must never read as idle or healthy: it waits on a person to log in, named as data,
+            # and is kept running so that a person can attach and log in
+            # (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person)). It is not restarted: a
+            # restart can't log in (R22), and a restarted session that is never prompted makes
+            # no request, so it would read healthy again while it can't.
+            if r.auth_failed is None or r.state != "waiting_on_a_person":
                 r.auth_failed = live.auth_failed
-                self._transition(r, "failed", f"{AUTH_FAILED_REASON}: {live.auth_failed}")
+                self._transition(r, "waiting_on_a_person", f"{AUTH_FAILED_REASON}: {live.auth_failed}",
+                                 waiting_on=auth_wait(live.auth_failed))
             return
         if r.auth_failed is not None:
             r.auth_failed = None
@@ -1152,11 +1314,12 @@ class Core:
             self._transition(r, "running", "first liveness from this incarnation")
 
     def session_waiting_on(self) -> Optional[str]:
-        """What the session unit waits on a person for, or None (MIS-0002-R21): the keystroke
-        fallback's first evidence that a prompt is idle (MIS-0004 R29)."""
+        """What the session unit waits on a person for, or None (MIS-0002-R21). The keystroke
+        fallback holds while it is anything (MIS-0004 R29), so no notice is ever typed into a
+        login flow while the session waits on its login (MIS-0002-R19)."""
         for r in self._units.values():
             if r.spec.kind == "session" and r.state == "waiting_on_a_person":
-                return "a person"
+                return f"its {auth_wait(r.auth_failed)}" if r.auth_failed is not None else "a person"
         return None
 
     def session_transcript(self, claude_home: Optional[Path] = None) -> Optional[Path]:
@@ -1224,7 +1387,11 @@ class Core:
         # An asked restart is half done when the old incarnation exits, whether this
         # core stopped it or it exited while the restart waited on its work in flight.
         asked_restart = r.then_start or r.drain is not None
+        if r.pane_respawn_due is not None:
+            print(f"⚠️ MACF: pd: {r.spec.name} ended instead of restarting in its pane; it restarts whole",
+                  file=sys.stderr)
         r.proc, r.kill_at, r.stopping, r.then_start, r.drain = None, None, None, False, None
+        r.pane_respawn_due = r.pane_respawn_reason = None
         r.alive_at, r.in_flight, r.auth_failed = None, None, None
 
         if stopping is None:
@@ -1435,6 +1602,20 @@ class Core:
             self._transition(r, "failed", why)
         return True
 
+    def _launch(self, r: _Runner) -> Tuple[List[str], Dict[str, str]]:
+        """The command and environment this unit is launched with, rendered from its declaration
+        now (MIS-0002-R13); KeyError when a placeholder has no value here."""
+        command = [render(a, self._placeholders) for a in r.spec.command]
+        env = {k: render(v, self._placeholders) for k, v in r.spec.environment.items()}
+        # Which unit it is and how often it beats come from the unit itself, never typed
+        # again in its environment, where a missing or mistyped value silently stopped
+        # its liveness (persistent_layer 3.2; two of three cutover trial runs).
+        env.setdefault(ENV_UNIT, r.spec.name)
+        env.setdefault(ENV_INTERVAL, f"{r.spec.liveness_interval_s:g}")
+        if "agent_home" in self._placeholders:
+            env.setdefault(ENV_HOME, self._placeholders["agent_home"])
+        return command, env
+
     def _spawn(self, r: _Runner) -> None:
         """Start the unit as this process's child, with the declared environment and
         nothing inherited (MIS-0002-R12 (pd_MUST_start_units_itself)), read from the
@@ -1453,15 +1634,8 @@ class Core:
         if r.spec.kind == "session" and self._held_by_hand_started(r):
             return
         try:
-            command = [render(a, self._placeholders) for a in r.spec.command]
-            env = {k: render(v, self._placeholders) for k, v in r.spec.environment.items()}
-            # Which unit it is and how often it beats come from the unit itself, never typed
-            # again in its environment, where a missing or mistyped value silently stopped
-            # its liveness (persistent_layer 3.2; two of three cutover trial runs).
-            env.setdefault(ENV_UNIT, r.spec.name)
-            env.setdefault(ENV_INTERVAL, f"{r.spec.liveness_interval_s:g}")
-            if "agent_home" in self._placeholders:
-                env.setdefault(ENV_HOME, self._placeholders["agent_home"])
+            command, env = self._launch(r)
+            env[ENV_LAUNCH] = launch_digest(command, env)
         except KeyError as e:
             r.proc, r.pid, r.proc_start = None, None, None
             r.want_up = False
@@ -1576,7 +1750,110 @@ class Core:
 
     def _begin_restart(self, r: _Runner, reason: str) -> None:
         r.then_start = True
+        if self._can_restart_in_pane(r):
+            # The session restarts in its pane and the unit's process, its tmux server and
+            # any attached client stay (#726). SIGUSR1 goes to the wrapper alone: tmux reads
+            # it as "recreate the socket". then_start stays set, so a wrapper that ends
+            # instead completes this as a restart of the whole unit.
+            try:
+                os.kill(r.pid, signal.SIGUSR1)
+            except (ProcessLookupError, PermissionError) as e:
+                print(f"⚠️ MACF: pd: could not ask {r.spec.name} to restart in its pane ({e}); "
+                      f"restarting it whole", file=sys.stderr)
+            else:
+                # The wrapper reaps the old session as the unit's own end does, SIGTERM then SIGKILL, each
+                # for its pane grace, so a session that ignores SIGTERM takes up to twice that before the
+                # pane runs again. The deadline outlasts it, or the case this exists for would get the
+                # whole restart at the stop grace.
+                from macf.pd import session_unit
+                bound = max(r.spec.stop_grace_s, 2 * session_unit.PANE_GRACE_S) + PANE_RESPAWN_MARGIN_S
+                r.pane_respawn_due = self._clock() + bound
+                r.pane_respawn_reason = reason
+                print(f"📡 MACF: pd: restarting {r.spec.name} in its pane: {reason}", file=sys.stderr)
+                return
         self._signal_stop(r, f"stopped to restart: {reason}")
+
+    def _can_restart_in_pane(self, r: _Runner) -> bool:
+        """Whether this session unit's process is a wrapper that said it can restart its session
+        in place. Its word is a ``pd_session_pane`` naming its pid and start; one this daemon's tail
+        missed, because the daemon adopted the wrapper later, is looked for once in the log, back
+        no further than the wrapper's start. A wrapper that never said so is restarted whole:
+        SIGUSR1 would end it."""
+        if (r.spec.kind != "session" or r.proc is None or not r.pid or not r.proc_start
+                or r.client_session or not verify_incarnation(r.pid, r.proc_start)):
+            return False
+        key = (r.pid, r.proc_start)
+        if r.pane_announced == key:
+            return self._launch_unchanged(r)
+        if r.pane_lookup == key:
+            return False
+        r.pane_lookup = key
+        since = start_epoch(r.proc_start)
+        if since is None:
+            return False               # with no start to stop at, the look-back would walk the whole log
+        # The check below stops only at an announcement older than the wrapper, so for a wrapper
+        # that never announced this walks the whole log, once per wrapper. read_events' since=
+        # (#957) bounds it to the wrapper's lifetime; it is passed here once that lands.
+        for event in read_events(reverse=True, scope="all", only=(EVENT_SESSION_PANE,)):
+            at = _float_or_none(event.get("timestamp"))
+            if at is not None and at < since - 60:
+                break                  # older than the wrapper: it never announced
+            data = event.get("data") or {}
+            if data.get("wrapper_pid") == r.pid and data.get("wrapper_start") == r.proc_start:
+                r.pane_announced = key
+                r.pane_launch = data.get("launch") if isinstance(data.get("launch"), str) else None
+                r.pane_respawns_seen = data.get("respawns") if isinstance(data.get("respawns"), int) else 0
+                return self._launch_unchanged(r)
+        return False
+
+    def _launch_unchanged(self, r: _Runner) -> bool:
+        """Whether what the wrapper was launched with is what the declaration would launch now. A
+        restart is how a changed declaration takes effect (MIS-0002-R13), and a pane respawned in
+        place runs on the environment the wrapper already has, so a changed declaration, or a
+        wrapper that doesn't say what it was launched with, gets the whole restart (#726)."""
+        if not r.pane_launch:
+            return False
+        try:
+            command, env = self._launch(r)
+        except KeyError:
+            return False
+        return launch_digest(command, env) == r.pane_launch
+
+    def _on_session_pane(self, event: dict) -> None:
+        """A session wrapper's ``pd_session_pane``: at its start, its word that it can restart in
+        place; after a respawn, the session's new incarnation, reported as a restart (R47)."""
+        data = event.get("data") or {}
+        r = next((u for u in self._units.values() if u.spec.kind == "session"), None)
+        respawns = data.get("respawns")
+        if (r is None or r.proc is None or not isinstance(respawns, int) or data.get("wrapper_pid") != r.pid
+                or not r.proc_start or data.get("wrapper_start") != r.proc_start):
+            return
+        key = (r.pid, r.proc_start)
+        if r.pane_announced != key:
+            r.pane_announced, r.pane_respawns_seen = key, respawns
+            r.pane_launch = data.get("launch") if isinstance(data.get("launch"), str) else None
+            return
+        if respawns <= r.pane_respawns_seen:
+            return
+        r.pane_respawns_seen = respawns
+        reason = r.pane_respawn_reason or "the wrapper restarted it"
+        r.pane_respawn_due = r.pane_respawn_reason = None
+        r.then_start = False
+        r.incarnations += 1
+        self._transition(r, "running", f"restarted in its pane as pid {data.get('pane_pid')}; its tmux "
+                                       f"server and attached clients kept ({reason})")
+        others = {o.spec.name for o in self._units.values() if o is not r and o.state in LIVE_STATES}
+        self._report_carried("session", "the session restarted in its pane", others, {r.spec.name}, {CONTEXT_LOST})
+
+    def session_incarnation_key(self) -> Optional[tuple]:
+        """The session's incarnation for whoever counts them: the unit's process with how many
+        times this daemon has started it or seen it restart in its pane. The lineage check
+        uses ``session_incarnation``, whose root a restart in the pane does not change."""
+        session = self.session_incarnation()
+        if session is None:
+            return None
+        r = next((u for u in self._units.values() if u.spec.kind == "session" and u.pid == session[0]), None)
+        return (*session, r.incarnations if r is not None else 0)
 
     def _fail(self, r: _Runner, reason: str) -> None:
         """A unit that is running but not working: record it failed, then stop what is
@@ -1590,7 +1867,7 @@ class Core:
         ``pd_unit_failed`` notice, whose id carries the failures in a row. The notifier owes only
         the newest per unit, so a crash loop while the session is down comes back as one notice
         with the count. Restarting is left to the policy, as before; the notice only says.
-        A session failed for its login is not counted here: it is still running, and a notice
+        A session waiting on its login never comes here: it is still running, and a notice
         would open a turn that can't authenticate (MIS-0002-R19)."""
         r.failures += 1
         self._transition(r, "failed", reason)
@@ -1694,12 +1971,14 @@ class Core:
                 return  # exited and not yet reaped: macOS refuses to signal a group of zombies
             print(f"⚠️ MACF: pd: cannot signal {r.spec.name} (pid {r.pid}): {e}", file=sys.stderr)
 
-    def _transition(self, r: _Runner, state: State, reason: str) -> None:
+    def _transition(self, r: _Runner, state: State, reason: str,
+                    waiting_on: Optional[str] = None) -> None:
         r.state = state
         r.since = self._wall()
         self._emit(EVENT_STATE, UnitState(
             agent=self.card, unit=r.spec.name, state=state,
             pid=r.pid, proc_start=r.proc_start, reason=reason, boot_id=self._boot_id,
+            waiting_on=waiting_on,
         ).model_dump())
 
     def _control(self, act: str, r: _Runner, asked_by: Asker, reason: str,

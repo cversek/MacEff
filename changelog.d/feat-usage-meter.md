@@ -1,0 +1,4 @@
+### Added
+
+- **A per-agent usage meter** (`macf/src/macf/usage_meter.py`). The Stop hook reads the new lines of the session's transcript and its subagents' transcripts and records one `usage_metered` event per file: tokens by kind (input, 5-minute and 1-hour cache writes, cache read, output) per model, the call count (each API call once, by message id), and the cause of the turn (operator, channel, peer, cron, notice, gate, subagent). The prompt hook records each turn's cause as `turn_cause`; a turn after a blocked Stop counts as `gate`. Metering starts when it first sees a file: a transcript that predates it is not back-read, and a subagent transcript born after it is read whole. Offsets live in the events, so nothing else stores state.
+- **`macf_tools budget me [--since 1h|1d|7d]`**: the agent's own spend by kind, model and cause, with weighted tokens and points of the week at a provisional rate (and a low figure that counts cache reads as free).

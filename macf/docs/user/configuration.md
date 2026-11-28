@@ -247,11 +247,11 @@ export MACF_EVENTS_MEMO_CHECK=1
 
 ### `MACF_SESSION_ROOT`
 
-**Purpose**: Move the per-session directories (the hook log, scratch scripts and caches) out of `/tmp/macf`.
+**Purpose**: Move the per-session directories (the hook log, scratch scripts and caches) out of the default, `sessions` in the user's own runtime directory.
 
 **Value**: Absolute path to a directory; each session's directory is `<root>/<agent>/<session>/`.
 
-**Default**: `/tmp/macf`. The framework's test suite points it at a temporary directory for the whole run, so a run inside a live session leaves that session's hook log alone.
+**Default**: `sessions` inside this user's private runtime directory: `$XDG_RUNTIME_DIR` when it is set, else `/tmp/macf-<uid>` (mode 0700). It is never a bare `/tmp/macf`, which the first account to create it owned, so every other agent's session folders failed (#780). The framework's test suite points it at a temporary directory for the whole run, so a run inside a live session leaves that session's hook log alone.
 
 **Example**:
 ```bash

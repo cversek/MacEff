@@ -157,8 +157,11 @@ it is when it is over an hour old. `budget status` names the last failure and wh
 
 `budget mode set` records what the operator wants from the allowance, as a `budget_mode_set` event.
 
-- **normal**: no intent beyond the work at hand. The default, and what every mode lapses to after a week.
-- **conserve**: the allowance is scarce; prefer smaller steps and checkpoints before the five-hour wall.
+- **normal**: no intent beyond the work at hand. The default, and what every mode lapses to after a week. A lapse is
+  announced once in the budget notice, naming the mode and when it was set, since the intent may still hold.
+- **conserve**: the allowance is scarce; prefer smaller steps and checkpoints before the five-hour wall. The Stop
+  hook's idle-stop failsafe yields on the first blocked Stop that made no new tool call and got no new result, so a
+  gate never forces a second turn of re-checking under conserve (amended 2026-11-22, BUG #1120).
 - **burn**: the allowance is expiring and the operator wants it spent on real work. Burn names a **target** percent
   (default 100), a **scope** (`session`, `week`, or a model's name as `/usage` shows it; default `week`) and a
   **deadline** (default the scope's reset). `status` then reports the pace still needed.

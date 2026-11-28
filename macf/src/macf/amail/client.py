@@ -16,6 +16,7 @@ import json
 import os
 import socket
 import stat
+import time
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -275,6 +276,87 @@ def _ingest_lock(home: Path, wait: bool) -> int:
     return fd
 
 
+#: The file in a pickup box naming the one store that ingests it (#872). Every reader of the box takes only
+#: ``*.amsg`` and ``*.eml`` (ingest, the broker's counts and its aged-entry alarm), so a dotfile is no entry.
+INGEST_CLAIM = ".ingest.claim"
+#: An empty claim older than this was left by a write that never finished; younger, it is being written.
+EMPTY_CLAIM_STALE_S = 60.0
+
+
+class BoxClaimed(Exception):
+    """Another store claims this pickup box; ingesting it here would split one agent's mail across two."""
+
+
+def _claim_holder(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
+
+
+def box_claim_conflict(home: Path, pickup_box: Path) -> Optional[str]:
+    """Why *home*'s store must not ingest *pickup_box*, or None when no other store claims it."""
+    mine = str(Path(home).resolve())
+    path = Path(pickup_box) / INGEST_CLAIM
+    holder = _claim_holder(path)
+    if not holder or holder == mine:
+        return None
+    return (f"the pickup box {pickup_box} is claimed by the store under {holder}, not {mine}: two stores "
+            f"ingesting one box would split this agent's mail between them (a copied amail settings file "
+            f"does this), so this one doesn't. If {holder} no longer ingests it, remove {path}")
+
+
+def _refuse_an_empty_claim(path: Path) -> None:
+    """An empty claim is one being written (the exclusive-create fallback writes after it creates), so
+    this pass waits (IngestBusy); one empty for over a minute was never finished, and is refused by name."""
+    if _claim_holder(path):
+        return
+    try:
+        age = time.time() - path.stat().st_mtime
+    except FileNotFoundError:
+        return  # noqa: MACEFF003 - removed since it was seen; the next pass claims afresh
+    if age > EMPTY_CLAIM_STALE_S:
+        raise BoxClaimed(f"the pickup box's claim {path} has been empty for {int(age)} s, so no store holds "
+                         f"it: a claim that was never finished. Remove it and the next ingest claims the box")
+    raise IngestBusy(f"the pickup box's claim {path} is being written; ingest waits for the next pass")
+
+
+def _claim_box(home: Path, pickup_box: Path) -> None:
+    """Claim the box for *home*'s store unless one already does, or raise BoxClaimed.
+
+    The claim is written whole under another name and linked into place, so a reader never sees it half
+    written and two first ingests can't both win: ``link`` fails when the name exists."""
+    said = box_claim_conflict(home, pickup_box)
+    if said:
+        raise BoxClaimed(said)
+    path = Path(pickup_box) / INGEST_CLAIM
+    if path.exists():
+        _refuse_an_empty_claim(path)
+        return
+    temp = path.with_name(f"{INGEST_CLAIM}.{os.getpid()}")
+    temp.write_text(str(Path(home).resolve()) + "\n", encoding="utf-8")
+    try:
+        os.link(temp, path)
+    except FileExistsError:  # noqa: S110 - another first ingest won the race; the check below reads its claim
+        pass
+    except OSError:
+        # A filesystem with no hard links: an exclusive create still lets only one store win, though a
+        # reader may meet the claim before its line is written, which reads as no claim yet (#872 review).
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o640)
+        except FileExistsError:  # noqa: S110 - another store created it first; the check below reads it
+            pass
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(str(Path(home).resolve()) + "\n")
+    finally:
+        temp.unlink(missing_ok=True)
+    said = box_claim_conflict(home, pickup_box)
+    if said:
+        raise BoxClaimed(said)
+    _refuse_an_empty_claim(path)
+
+
 def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
            agent: str = "", *, wait: bool = True, domain: str = "",
            registry: Optional[Registry] = None) -> list:
@@ -312,6 +394,7 @@ def ingest(home: Path, pickup_box: Path, contacts_path: Optional[Path] = None,
         registry = Registry(registry_path())
     lock = _ingest_lock(home, wait)
     try:
+        _claim_box(home, pickup_box)     # one store per box (#872): raises BoxClaimed for any other
         return _ingest_locked(home, pickup_box, contacts_path, agent, domain, registry)
     finally:
         os.close(lock)
@@ -723,9 +806,30 @@ def read_delivered_internet(home: Path, ref: str):
     return store.find_internet(home, ref)
 
 
-def status(socket_path: Path, timeout: float = 10.0) -> Dict[str, Any]:
+def status(socket_path: Path, timeout: float = 10.0,
+           sender: Optional[str] = None) -> Dict[str, Any]:
     """The caller's mailbox counts, including the one it cannot compute
     itself: quarantined mail lives where the refused party cannot edit it,
-    so its count only exists on the far side of the socket."""
-    return _roundtrip({"op": "status"}, socket_path, timeout,
-                      "No status was returned.")
+    so its count only exists on the far side of the socket.
+
+    `sender` is the agent's claim, as `submit` sends it. On a uid the host
+    tier declares shared, the broker cannot tell whose counts to answer
+    without it (amail.md §1.3); on any other uid the kernel's answer stands
+    and a disagreeing claim is refused."""
+    req: Dict[str, Any] = {"op": "status"}
+    if sender:
+        req["sender"] = sender
+    return _roundtrip(req, socket_path, timeout, "No status was returned.")
+
+
+def contacts(socket_path: Path, timeout: float = 10.0,
+             sender: Optional[str] = None) -> Dict[str, Any]:
+    """The correspondents the broker checks for the caller: address and direction each.
+
+    The broker answers, not the contact file, which an agent can't read from its side by design;
+    so the list is what is enforced now. `sender` is the claim, as for `status`. An older broker
+    refuses the operation by name, and `_roundtrip` raises that refusal as it does any other."""
+    req: Dict[str, Any] = {"op": "contacts"}
+    if sender:
+        req["sender"] = sender
+    return _roundtrip(req, socket_path, timeout, "No contact list was returned.")

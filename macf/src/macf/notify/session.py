@@ -187,7 +187,7 @@ def proc_start_key(value) -> Optional[int]:
         return None
     try:
         return int(text)
-    except ValueError:
+    except ValueError:  # noqa: S110 - probe: a non-ticks form is expected, the asctime parse decides
         pass
     try:
         return calendar.timegm(time.strptime(text, _ASCTIME))

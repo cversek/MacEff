@@ -518,3 +518,13 @@ agents:
     # Accepted after the key retired: suspect even with the broker's own record.
     late = _ingested(tmp_path / "d", signed(), reg, handed_off_at="2026-07-01T00:00:00+00:00")[0]
     assert late.trust == "suspect"
+
+
+def test_the_brokers_domain_matches_without_regard_to_case():
+    """The broker writes the addressing's domain as declared and start-up writes the recipient's
+    lowercased (#942); a domain differing only in case is the same domain."""
+    from macf.amail.attest import acceptance_time
+    side = {"rung": "local", "origin_domain": "Orchard.Local", "handed_off_at": "2026-03-01T12:00:00+00:00"}
+    assert acceptance_time(side, "orchard.local") is not None
+    assert acceptance_time(side, "elsewhere.local") is None
+    assert acceptance_time({**side, "origin_domain": ""}, "") is None     # no domain known: no record

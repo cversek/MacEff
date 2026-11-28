@@ -10,6 +10,7 @@ tmux or a daemon: ``build_plan(..., probes=Probes(...))``. ``host_probes`` are t
 """
 from __future__ import annotations
 
+import json
 import shlex
 import shutil
 import subprocess
@@ -121,6 +122,13 @@ class Probes:
     #: Whether the daemon is installed under the service manager at all. One that isn't is
     #: installed by the move, after the declaration (``pd install``, undone by ``pd uninstall``).
     daemon_installed: Callable[[], bool] = lambda: True
+    #: The organization's channel allowlist as Claude Code reads it (``allowlist.managed_allowlist``): None
+    #: when none is set. Absent (None here), the plan says nothing about it; a plan built from the host
+    #: passes the real reader, so the move names a channel the client will not load (#860 item 12).
+    channel_allowlist: Optional[Callable[[], Optional[set]]] = None
+    #: Whether this user's systemd instance outlives their logins (``loginctl`` Linger): True, False, or
+    #: None when it can't be read. Read on systemd hosts only (#860).
+    linger: Callable[[], Optional[bool]] = lambda: None
 
 
 def staged_path(home: Path) -> Path:
@@ -128,9 +136,25 @@ def staged_path(home: Path) -> Path:
     return path.with_name(path.name + STAGED_SUFFIX)
 
 
-def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "systemd") -> Check:
+def _current_form(text: str, card: str) -> Tuple[str, bool]:
+    """A declaration's text with this home's own card in the old ``Name@shortid`` form changed to
+    the new one, as the cut-over rewrites it (R165, R166), and whether it was: a staged file made
+    before the card revision still validates here, and the move leaves it rewritten (#919)."""
     try:
-        declaration = Declaration.model_validate_json(path.read_text())
+        old = json.loads(text).get("agent")
+    except (ValueError, AttributeError):
+        return text, False
+    if isinstance(old, str) and calling_card.from_history(old) != old \
+            and calling_card.same(calling_card.from_history(old), card):
+        return text.replace(json.dumps(old), json.dumps(card)), True
+    return text, False
+
+
+def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "systemd") -> Check:
+    old_form = False
+    try:
+        text, old_form = _current_form(path.read_text(), card)
+        declaration = Declaration.model_validate_json(text)
     except FileNotFoundError:
         return Check("staged declaration", False,
                      f"none at {path}: stage the declaration with the session unit there first")
@@ -165,7 +189,24 @@ def _staged_check(path: Path, card: str, runtime: Optional[str], init: str = "sy
         return Check("staged declaration", False,
                      f"the session unit's environment must declare XDG_RUNTIME_DIR={runtime or '<yours>'} "
                      f"(it declares {declared or 'none'}), or its tmux server lands where nothing looks")
-    return Check("staged declaration", True, f"{path} validates, with session unit {session.name}")
+    note = ", in the old card form, which the move rewrites in place (R165)" if old_form else ""
+    return Check("staged declaration", True, f"{path} validates, with session unit {session.name}{note}")
+
+
+def _allowlist_check(path: Path, read_allowlist: Callable[[], Optional[set]]) -> Optional[Check]:
+    """A note when the staged declaration lists a channel the client will not admit for want of an
+    organization allowlist: the session unit starts with ``--channels`` and the client refuses it,
+    so the daemon falls back to keystroke wakes (#860 item 12). It holds nothing back, because the
+    allowlist is the host's managed settings, a root-owned file and the operator's to write; the
+    plan names the finding, which says the file and what to list there. None when nothing is left out
+    or the declaration can't be read (``_staged_check`` says why)."""
+    from macf.pd import allowlist
+    try:
+        declaration = Declaration.model_validate_json(path.read_text())
+    except (OSError, ValidationError):
+        return None  # noqa: MACEFF003 - _staged_check, run just before, reports why this declaration can't be read
+    found = allowlist.unadmitted_without_allowlist(declaration, read_allowlist())
+    return Check("channel allowlist", True, found[0]) if found else None
 
 
 def default_socket(uid: Optional[int] = None) -> Path:
@@ -229,10 +270,31 @@ def _launchd_init(agent: str, card: str, harness_label: Optional[str], uid: int,
                  restart_daemon=lambda: ctl("kickstart", daemon))
 
 
+def _linger_check(lingers: Optional[bool], accepted: bool) -> Check:
+    """Whether the daemon, and the session unit under it, outlive the user's last logout (#860).
+
+    Without linger the user's systemd instance stops at the last logout and doesn't start at boot, so a
+    move that reads "Ready" would leave an agent that is only up while someone is logged in, which
+    defeats an always-on one. Enabling it is the host operator's decision, so the plan names the command
+    and holds until it is on or the move is accepted without it."""
+    if lingers is True:
+        return Check("linger", True, "on: the user's systemd instance, and the daemon with it, outlives their logins")
+    if lingers is None:
+        return Check("linger", True, "could not be read; `loginctl show-user $USER -p Linger` says whether the "
+                                     "daemon outlives the last logout")
+    command = "loginctl enable-linger $USER"
+    if accepted:
+        return Check("linger", True, f"off, and the move is accepted without it (--accept-no-linger): the daemon "
+                                     f"stops at the last logout; `{command}` is the host operator's call")
+    return Check("linger", False, f"off: the user's systemd instance, and the daemon and session unit with it, stop "
+                                  f"at the last logout and don't start at boot; `{command}` keeps them up and is the "
+                                  f"host operator's call, or add --accept-no-linger to move without it")
+
+
 def build_plan(home: Path, card: str, agent: str, probes: Probes,
                staged: Optional[Path] = None, harness_unit: Optional[str] = None,
                runtime: Optional[str] = None, uid: Optional[int] = None,
-               launch_agents: Optional[Path] = None) -> Plan:
+               launch_agents: Optional[Path] = None, accept_no_linger: bool = False) -> Plan:
     """What moving *agent*'s session onto its daemon would do, and whether it can be done now.
 
     *agent* is the session identifier (``Name_uuid6``), *card* the calling card, *runtime*
@@ -269,8 +331,14 @@ def build_plan(home: Path, card: str, agent: str, probes: Probes,
                             "launchd hosts (persistent_layer 5.2)"))
         return Plan(agent, card, False, checks)
     checks.append(Check("init system", True, init.describe))
+    if init.name == "systemd":
+        checks.append(_linger_check(probes.linger(), accept_no_linger))
 
     checks.append(_staged_check(staged, card, runtime, init.name))
+    if probes.channel_allowlist is not None:
+        note = _allowlist_check(staged, probes.channel_allowlist)
+        if note is not None:
+            checks.append(note)
     why = probes.daemon_answers()
     # No daemon installed at all, as for a seat agent init left for this move: installing it is
     # a step. One installed that doesn't answer is a fault the move would only hide.
@@ -539,6 +607,8 @@ def host_probes(home: Path, card: str, platform: Optional[str] = None) -> Probes
         harness_label=harness_label,
         hand_started=hand_started,
         daemon_installed=daemon_installed,
+        linger=lambda: _own_linger(),
+        channel_allowlist=lambda: __import__("macf.pd.allowlist", fromlist=["managed_allowlist"]).managed_allowlist(),
     )
 
 
@@ -626,8 +696,15 @@ def came_up_by_status(home: Path, card: str, unit: str, timeout_s: float = COME_
     return poll
 
 
+def _own_linger() -> Optional[bool]:
+    import os
+    import pwd
+    from macf.platform.systemd import linger_enabled
+    return linger_enabled(pwd.getpwuid(os.getuid()).pw_name)
+
+
 def arm_argv(agent: str, home: Path, staged: Path, log_path: Path, python: str,
-             environ: Optional[Dict[str, str]] = None) -> List[str]:
+             environ: Optional[Dict[str, str]] = None, accept_no_linger: bool = False) -> List[str]:
     """The transient unit that carries the plan out, outside the session it stops: the
     session's own process tree ends at step 2, so nothing of the move may live in it.
     A ``PYTHONPATH`` the caller runs under is passed on, so the unit imports the same macf
@@ -638,7 +715,8 @@ def arm_argv(agent: str, home: Path, staged: Path, log_path: Path, python: str,
     return ["systemd-run", "--user", "--unit", f"{RUN_UNIT_PREFIX}{agent}", "--collect",
             "--property", "Type=exec", *setenv, "--",
             python, "-m", "macf.cli", "harness", "cutover", "--agent", agent, "--home", str(home),
-            "--staged", str(staged), "--execute", "--log", str(log_path)]
+            "--staged", str(staged), "--execute", "--log", str(log_path),
+            *(["--accept-no-linger"] if accept_no_linger else [])]
 
 
 def job_paths(home: Path, card: str, stamp: str) -> "tuple[Path, Path]":

@@ -485,15 +485,15 @@ def full_autonomy_denial(modes, play_time_active: bool, permission_mode: Optiona
     """Why an open dialog should be denied at once, or None (autonomous_operation 5.5).
 
     AUTO_MODE alone says nothing: operators stay in it while attending, and a dialog is fine then.
-    It takes a sign that nobody will answer. In the default permission mode nearly every write
-    prompts, so denying there would block the agent's own work; a mode the client did not report
-    could be that one, so unknown leaves the dialog up too."""
+    It takes a sign that nobody will answer: the operator remote, or idle past the presence
+    timeout. A sprint or play time running is no such sign, so a present operator answers its
+    dialogs (#963); ``play_time_active`` is kept for callers and no longer decides. In the default
+    permission mode nearly every write prompts, so denying there would block the agent's own work;
+    a mode the client did not report could be that one, so unknown leaves the dialog up too."""
     if "AUTO_MODE" not in modes or permission_mode in (None, "default"):
         return None
     if "USER_REMOTE" in modes or "USER_IDLE" in modes:
         who = "the operator is away"
-    elif "SPRINT" in modes or play_time_active:
-        who = "a sprint or play time is running"
     else:
         return None
     if tool == "AskUserQuestion":
@@ -554,6 +554,115 @@ def read_history(days: float, *, include_questions: bool = False, home: Optional
             cache[where] = ask_rules(where, home)
         d.rule = matching_rule(d.tool, {"command": d.command, "file_path": d.command}, cache[where])
     return dialogs
+
+
+@dataclass
+class Approval:
+    """How one tool call was let through (#1060): ``how`` is dialog, rule or mode."""
+    session_id: str
+    at: float
+    tool: str
+    command: str
+    how: str
+    detail: str
+
+
+def approvals(events_oldest_first: Iterable[dict], rules: List[Tuple[str, str, Path]]) -> List[Approval]:
+    """Each tool call in ``events_oldest_first`` with how it was approved, derived and never recorded.
+
+    A dialog for the call means the operator answered it: approved if the call ran, denied if not.
+    With no dialog, an allow rule in ``rules`` that matches it is the answer; failing that, by
+    elimination, the session's permission mode let it through (in auto mode, its classifier). The
+    rules are the ones in force now, so a rule changed since the call is not seen; and an answer at
+    the terminal and one over Remote Control look the same in the log."""
+    events = list(events_oldest_first)
+    unclaimed = list(history(events, include_questions=True))
+    out: List[Approval] = []
+    for event in events:
+        if event.get("event") != "tool_call_started":
+            continue
+        hook_input = event.get("hook_input") or {}
+        sid = _session_of(event) or ""
+        tool = str(hook_input.get("tool_name") or (event.get("data") or {}).get("tool") or "unknown")
+        tool_input = hook_input.get("tool_input")
+        command = _identity(tool_input)
+        at = float(event.get("timestamp") or 0.0)
+        dialog = next((d for d in unclaimed if d.session_id == sid and d.tool == tool
+                       and d.command == command and d.opened >= at), None)
+        if dialog is not None:
+            unclaimed.remove(dialog)
+            said = {"ran": "approved at the dialog", "not run": "denied at the dialog"}
+            out.append(Approval(sid, at, tool, command, "dialog", said.get(dialog.outcome, f"dialog {dialog.outcome}")))
+            continue
+        # A rule lets a call through only when it covers the whole call: for a chain, every part.
+        # ``decide`` answers "any part matches", which is right for ask and deny and too generous here.
+        parts = segment_decisions(command, rules) if tool == "Bash" else [(command, decide(tool, tool_input, rules))]
+        if parts and all(v.kind == "allow" for _, v in parts):
+            named = sorted({f"{v.rule} ({v.source})" for _, v in parts})
+            out.append(Approval(sid, at, tool, command, "rule", f"allow rule {', '.join(named)}"))
+            continue
+        mode = str(hook_input.get("permission_mode") or "unreported")
+        by = f"the {mode} mode" + ("'s classifier" if mode == "auto" else "")
+        out.append(Approval(sid, at, tool, command, "mode", f"no dialog and no allow rule: {by} let it through"))
+    return out
+
+
+def previous_call_note(events_oldest_first: Iterable[dict], session_id: str) -> Optional[str]:
+    """One line when this session's previous call ran because the operator approved it at a dialog, else
+    None (#1060). Read at a call's start, it speaks of the call before, so it says each approval once,
+    with nothing recorded. Only the exception: a call a rule or the mode let through says nothing, and a
+    denial the client already reports to the agent itself."""
+    rows = [a for a in approvals(events_oldest_first, []) if a.session_id == session_id]
+    if len(rows) < 2:
+        return None
+    prev = rows[-2]
+    if prev.how != "dialog" or not prev.detail.startswith("approved"):
+        return None
+    return (f"Your previous call ({prev.tool}: {prev.command[:60]}) ran because the operator approved it at a "
+            f"permission dialog, not by a rule. See: macf_tools permissions how")
+
+
+def read_previous_call_note(session_id: str, limit: int = 400) -> Optional[str]:
+    """``previous_call_note`` over this agent's newest events, read back only as far as this session's
+    previous call started (bound by meaning; ``limit`` caps it). It runs at every call's start, so it
+    reads what that one answer needs and no more."""
+    from macf.agent_events_log import read_events
+    window, starts = [], 0
+    for event in read_events(reverse=True, scope="all", only=PROGRESS | {REQUEST}):
+        window.append(event)
+        if event.get("event") == "tool_call_started" and _session_of(event) == session_id:
+            starts += 1
+            if starts == 2:      # this call's start, then the previous call's: all that is needed
+                break
+        if len(window) >= limit:
+            break
+    window.reverse()
+    return previous_call_note(window, session_id)
+
+
+def read_approvals(days: float, *, home: Optional[Path] = None, project_dir: str = "",
+                   environ=None) -> List[Approval]:
+    """``approvals`` over the last ``days`` of this agent's log, against the rules in force now."""
+    from macf.agent_events_log import read_events
+    cutoff = time.time() - days * 86400.0
+    window = []
+    for event in read_events(reverse=True, scope="all", only=PROGRESS | {REQUEST}):
+        if float(event.get("timestamp") or 0.0) < cutoff:
+            break
+        window.append(event)
+    window.reverse()
+    return approvals(window, rules_in_force(project_dir or os.getcwd(), home or Path.home(), environ))
+
+
+def approvals_text(rows: List[Approval]) -> str:
+    """One line per call, newest last, under a line saying what the answer rests on."""
+    lines = ["How each call was approved (judged against today's rules; a rule changed since a call isn't seen):"]
+    for a in rows:
+        when = time.strftime("%m-%d %H:%M:%S", time.localtime(a.at))
+        lines.append(f"  {when}  {a.tool}  {a.command[:70]}  ->  {a.detail}")
+    if not rows:
+        lines.append("  (no tool calls in the window)")
+    return "\n".join(lines)
 
 
 def _unmatched_group(d: Dialog) -> str:

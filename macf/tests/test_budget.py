@@ -635,8 +635,9 @@ attributes:
 '''
 
 
-def keychain(monkeypatch, dump=DUMP):
-    """A fake `security`: the listing above, and a token per account."""
+def keychain(monkeypatch, dump=DUMP, tokens=None):
+    """A fake `security`: the listing above, and a token per account. An account whose token is ""
+    has an item that reads but holds no token; one that is absent has no item."""
     import subprocess
     asked = []
 
@@ -645,9 +646,10 @@ def keychain(monkeypatch, dump=DUMP):
             return subprocess.CompletedProcess(cmd, 0 if dump is not None else 1, dump or "", "")
         acct = cmd[cmd.index("-a") + 1] if "-a" in cmd else "x"
         asked.append(acct)
-        token = {"x": "sk-ant-oat01-STALE", "unknown": FAKE_TOKEN}.get(acct)
-        out = json.dumps({"claudeAiOauth": {"accessToken": token}}) if token else ""
-        return subprocess.CompletedProcess(cmd, 0 if token else 44, out, "")
+        token = ({"x": "sk-ant-oat01-STALE", "unknown": FAKE_TOKEN} if tokens is None else tokens).get(acct)
+        out = json.dumps({"claudeAiOauth": {"accessToken": token, "expiresAt": 0 if token == "" else 1}}) \
+            if token is not None else ""
+        return subprocess.CompletedProcess(cmd, 0 if token is not None else 44, out, "")
 
     monkeypatch.setattr(budget.sys, "platform", "darwin")
     monkeypatch.setattr(budget.subprocess, "run", run)
@@ -662,7 +664,33 @@ def test_the_newest_keychain_item_is_the_one_read(monkeypatch):
     assert budget.read_token() == FAKE_TOKEN and asked == ["unknown"]
 
 
+def test_a_newer_item_that_holds_no_token_is_passed_over(monkeypatch):
+    """A session started without USER can leave a newer item under "unknown" that holds no token at all,
+    beside the login in use. The newest item that holds a token is the one read."""
+    asked = keychain(monkeypatch, tokens={"unknown": "", "x": FAKE_TOKEN})
+    assert budget.read_token() == FAKE_TOKEN and asked == ["unknown", "x"]
+
+
+def test_when_no_item_holds_a_token_the_newest_is_what_is_reported(monkeypatch):
+    keychain(monkeypatch, tokens={"unknown": "", "x": ""})
+    assert json.loads(budget.read_credential())["claudeAiOauth"]["expiresAt"] == 0
+    with pytest.raises(budget.BudgetError, match="no OAuth access token"):
+        budget.read_token()
+
+
 def test_without_a_listing_the_first_match_is_read(monkeypatch):
     asked = keychain(monkeypatch, dump=None)
     assert budget.keychain_accounts() == []
     assert budget.read_token() == "sk-ant-oat01-STALE" and asked == ["x"]
+
+
+def test_a_lapsed_mode_is_reported_not_silent(log):
+    """`conserve` older than the weekly window reads as normal; lapsed_mode says which intent lapsed."""
+    import time
+    budget.set_mode("conserve")
+    assert budget.lapsed_mode() is None, "still in force"
+    later = time.time() + budget.HISTORY.total_seconds() + 3600
+    assert budget.current_mode(later)["mode"] == "normal"
+    assert budget.lapsed_mode(later)["mode"] == "conserve"
+    budget.set_mode("normal")
+    assert budget.lapsed_mode(later) is None, "an explicit normal is not a lapse"

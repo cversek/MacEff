@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Callable, Dict, Optional, Set
 
@@ -33,6 +34,10 @@ INGEST_S = 2.0
 DEFAULT_CONTACTS = "/var/lib/amail_broker/contacts.json"
 #: The event one pass that moved anything writes.
 EVENT_INGESTED = "pd_mail_ingested"
+EVENT_REFUSAL_CLEARED = "pd_mail_access_cleared"
+# A refused box is looked at again this often: minutes, not every pass, so a fixed group or grant
+# takes effect without a daemon restart and a box that stays refused costs next to nothing (#872).
+RECHECK_S = 300.0
 #: The notice a box or store the receiver can't use raises.
 GRANT_SOURCE = "pd_grant_denied"
 
@@ -70,6 +75,7 @@ class Receiver:
         self._checked = False
         self.refused: Optional[str] = None
         self._said: Set[str] = set()
+        self._recheck_at = float("-inf")
 
     def tick(self, now: float) -> None:
         if now < self._next:
@@ -87,15 +93,40 @@ class Receiver:
                 print(f"⚠️ MACF: pd: the receiver can't ingest {self.agent}'s mail, so none is "
                       f"ingested by this daemon: {self.refused}", file=sys.stderr)
                 self._notice(GRANT_SOURCE, f"pd_grant_denied:amail-receiver:{int(now)}")
+                self._recheck_at = now + RECHECK_S
+        elif self.refused and now >= self._recheck_at:
+            self._recheck_at = now + RECHECK_S
+            self._look_again(now)
         if self.refused:
             return
         self.ingest()
 
+    def _look_again(self, now: float) -> None:
+        """Re-check a refused box. Said once when it clears; a box that stays refused isn't announced again."""
+        again = self._access()
+        if again is not None:
+            self.refused = again
+            return
+        if not os.path.isdir(self.box):
+            return      # removed, not fixed: _access answers None for a missing box, which is no clearing
+        self.refused = None
+        print(f"pd: the receiver can ingest {self.agent}'s mail again: access to {self.box} is fixed",
+              file=sys.stderr)
+        self._append(EVENT_REFUSAL_CLEARED, {"agent": self.card, "box": str(self.box)})
+
     def ingest(self) -> None:
-        from macf.amail.client import IngestBusy, ingest
+        from macf.amail.client import BoxClaimed, IngestBusy, ingest
         try:
             results = ingest(self.home, self.box, contacts_path=self.contacts,
                              agent=self.agent, wait=False, domain=self.domain)
+        except BoxClaimed as e:
+            # Claimed by another store since the first check: refused like any box this daemon can't use.
+            self.refused = str(e)
+            print(f"⚠️ MACF: pd: the receiver can't ingest {self.agent}'s mail, so none is ingested by this "
+                  f"daemon: {self.refused}", file=sys.stderr)
+            self._notice(GRANT_SOURCE, f"pd_grant_denied:amail-receiver:{int(time.time())}")
+            self._recheck_at = float("-inf")
+            return
         except IngestBusy:
             return  # noqa: MACEFF003 - `amail list` holds the lock and takes what is waiting; this pass tries again
         except OSError as e:
@@ -137,7 +168,8 @@ class Receiver:
             return f"the store under {self.home} can't be made ({e})"
         if not os.access(new, os.W_OK):
             return f"the store's {new} isn't writable by this daemon"
-        return None
+        from macf.amail.client import box_claim_conflict
+        return box_claim_conflict(self.home, self.box)     # another store's box (#872)
 
     def _group_hint(self) -> str:
         """Name the case a container meets: the box's group reachable only as a supplementary

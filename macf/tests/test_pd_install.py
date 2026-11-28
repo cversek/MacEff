@@ -85,6 +85,26 @@ def test_the_plan_prints_the_unit_and_changes_nothing(tmp_path, monkeypatch, tie
     assert tier.installed == [] and f"python -m macf.pd {home.resolve()}" in capsys.readouterr().out
 
 
+def test_the_plan_leaves_an_old_form_declaration_byte_identical(tmp_path, monkeypatch, tier, capsys):
+    """--plan promises to change nothing, and ran the cut-over before it planned (#919). It now says
+    what the next start would do and plans from the file as that start would leave it."""
+    home = make_home(tmp_path)
+    path = declaration_path(home)
+    old = path.read_text().replace(CARD, "Tester@abc123")
+    path.write_text(old)
+    monkeypatch.setenv("MACEFF_AGENT_HOME_DIR", str(home))
+    assert run("install", "--plan") == 0
+    assert path.read_bytes() == old.encode()
+    assert not path.with_name("declaration.json.pre-card-underscore").exists()
+    out = capsys.readouterr().out
+    assert "--plan leaves it as it is" in out and "keeps the original at" in out
+    assert f"python -m macf.pd {home.resolve()}" in out and tier.installed == []
+
+    assert run("install") == 0       # a real install still rewrites it, once, keeping the original
+    assert path.read_text() == old.replace("Tester@abc123", CARD)
+    assert path.with_name("declaration.json.pre-card-underscore").read_text() == old
+
+
 def test_install_and_uninstall_name_the_resolved_home_and_its_own_card(tmp_path, monkeypatch, tier):
     """The card comes from the home's own files and the home is resolved, so a unit
     installed through a symlink still names the real home."""

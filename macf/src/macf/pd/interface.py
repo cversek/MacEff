@@ -55,7 +55,9 @@ UNIT_STATES = get_args(State)
 #: The placeholders the daemon fills in when it renders a unit's command and environment
 #: at start (MIS-0002-R13 (pd_MUST_render_env_at_start)). The same agent has a different
 #: home on a host and in a container, so a declaration names it this way, never as a path.
-PLACEHOLDERS = ("agent_home", "card", "runtime_dir")
+#: ``python`` is the daemon's own interpreter, which a declaration can't know when it is
+#: validated (a unit's comes from ``pd install``); the report schedules run with it (#1027).
+PLACEHOLDERS = ("agent_home", "card", "runtime_dir", "python")
 _PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 #: macOS privacy grants a unit may declare (MIS-0002-R63 (unit_MUST_declare_privacy_grants)).
@@ -209,6 +211,10 @@ class Unit(_Closed):
         return self
 
 
+#: The days before a login's refresh grant ends that it reads expiring, unless a declaration says otherwise.
+EXPIRING_DAYS = 3.0
+
+
 class Window(_Closed):
     start: str = Field(pattern=r"^\d{2}:\d{2}$")
     end: str = Field(pattern=r"^\d{2}:\d{2}$")
@@ -226,6 +232,48 @@ class MissedRunPolicy(_Closed):
         if (self.kind == "run_once_in_window") != (self.window is not None):
             raise ValueError("a window is given exactly when the policy is run_once_in_window")
         return self
+
+
+class Reports(_Closed):
+    """The twice-daily report the daemon owns, and the warning window a login's expiry is
+    judged by (#1027). Absent from a declaration means no report is declared and the window is
+    the three days the watch has always used.
+
+    - ``times``: the hours of the day the report runs, read in the declaration's ``timezone``.
+    - ``warn_days``: how many days before a login's refresh grant ends the verdict reads
+      ``expiring``, for the daemon's record, ``pd login`` and the outside watch alike.
+    - ``reporter``: the one agent card whose report carries the login line. Agents that share
+      one macOS account share one login, so the others say who reports it instead of
+      repeating the warning. None: this agent reports it.
+    - ``missed``: what a report does when the daemon was down at its hour. Required, with no
+      default, as for any schedule (MIS-0002-R25, R109)."""
+
+    times: List[str] = Field(min_length=1)
+    warn_days: float = Field(default=EXPIRING_DAYS, gt=0, le=30, allow_inf_nan=False)
+    reporter: Optional[str] = Field(default=None, min_length=1)
+    missed: MissedRunPolicy
+
+    @field_validator("times")
+    @classmethod
+    def _times_of_day(cls, v: List[str]) -> List[str]:
+        for t in v:
+            if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t):
+                raise ValueError(f"{t!r} is not an HH:MM time of day")
+        if len(set(v)) != len(v):
+            raise ValueError("a report time is listed once")
+        return v
+
+
+#: What each report schedule runs: ``pd report`` under the daemon's own interpreter, printing what
+#: the session is woken with (#1027).
+REPORT_COMMAND = ("{python}", "-m", "macf.cli", "pd", "report")
+#: A report reads a credential and prints a line; a minute is ample.
+REPORT_TIMEOUT_S = 60.0
+
+
+def report_schedule_name(time_of_day: str) -> str:
+    """The schedule a report time becomes: ``report-HHMM``."""
+    return "report-" + time_of_day.replace(":", "")
 
 
 class PromptRun(_Closed):
@@ -349,6 +397,23 @@ NoticeRoute = Literal["agent", "operator", "both", "held_until_present"]
 #: How a state change for an authentication failure begins its reason (MIS-0002-R19). The
 #: session is still running, so a daemon that starts while it reads failed adopts it by this.
 AUTH_FAILED_REASON = "authentication failed"
+#: What a session that can't authenticate waits on, in its state record's ``waiting_on``
+#: (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person)). The watch, the status and the attach
+#: key on these values, never on the reason's words. ``login``: an account's login has expired or
+#: was refused, and a person runs ``/login``. ``credential``: an API key was rejected, and there is
+#: no ``/login`` to run; a person replaces the key.
+LOGIN_WAIT = "login"
+CREDENTIAL_WAIT = "credential"
+AUTH_WAITS = (LOGIN_WAIT, CREDENTIAL_WAIT)
+#: What a person does about each, as the status, the attach and the watch say it.
+AUTH_REMEDY = {LOGIN_WAIT: "attach and run /login",
+               CREDENTIAL_WAIT: "replace the rejected API key, then restart the session"}
+
+
+def auth_wait(said: Optional[str]) -> str:
+    """Which wait a failed authentication is, from what the client said: a rejected API key names
+    its key ("Invalid API key"), and every other failure is a login's (MIS-0002-R19)."""
+    return CREDENTIAL_WAIT if said and "api key" in said.lower() else LOGIN_WAIT
 #: The notice source of mail left unread past the declared threshold (MIS-0002-R55).
 UNREAD_MAIL_SOURCE = "pd_unread_mail"
 #: The notice source of a prompt run that met a permission prompt (MIS-0002-R32).
@@ -705,6 +770,8 @@ class Declaration(_Closed):
     keep_harness_idle_compaction: bool = False
     wind_down: Optional[WindDown] = None
     timezone: Optional[str] = None
+    #: The report the daemon owns and the login warning window (#1027). None: no report declared.
+    reports: Optional[Reports] = None
     #: Commands the agent's ``check`` entries may run, by name (the scheduler design, 4.2).
     check_templates: Dict[str, CheckTemplate] = Field(default_factory=dict)
     stream_grants: List[StreamGrant] = Field(default_factory=list)
@@ -881,10 +948,35 @@ class Declaration(_Closed):
         return self
 
     @model_validator(mode="after")
+    def _reports_run_as_schedules(self) -> "Declaration":
+        # Each report time is a schedule the scheduler already runs (#1027), so the missed-run
+        # policy, the install check and every reader of ``schedules`` apply with no code of their
+        # own. A name the declaration already uses is its own schedule and is kept, which also
+        # keeps a declaration read back from its own dump from doubling them.
+        if self.reports is None:
+            return self
+        have = {s.name for s in self.schedules}
+        env = {"MACEFF_AGENT_HOME_DIR": "{agent_home}"}
+        session = next((u for u in self.units if u.kind == "session"), None)
+        for key in ("USER", "LOGNAME"):    # how macOS finds the stored login (#852, #1073)
+            if session is not None and key in session.environment:
+                env[key] = session.environment[key]
+        for t in self.reports.times:
+            name = report_schedule_name(t)
+            if name in have:
+                continue
+            hour, minute = t.split(":")
+            self.schedules.append(Schedule(
+                name=name, cron=f"{int(minute)} {int(hour)} * * *", missed_run=self.reports.missed,
+                target=self.agent, timeout_s=REPORT_TIMEOUT_S,
+                run=CommandRun(command=list(REPORT_COMMAND), wake_when="stdout", environment=dict(env))))
+        return self
+
+    @model_validator(mode="after")
     def _crons_and_windows_name_their_timezone(self) -> "Declaration":
-        if (self.schedules or self.quiet_windows) and not self.timezone:
-            raise ValueError("a declaration with schedules or quiet windows names the timezone "
-                             "its crons and windows are read in, as an IANA name such as 'UTC' "
+        if (self.schedules or self.quiet_windows or self.reports) and not self.timezone:
+            raise ValueError("a declaration with schedules, quiet windows or reports names the timezone "
+                             "its crons, windows and report times are read in, as an IANA name such as 'UTC' "
                              "or 'America/New_York'")
         if self.timezone:
             try:
@@ -933,6 +1025,11 @@ EVENT_UNREAD_MAIL_CLEARED = "pd_unread_mail_cleared"
 #: (MIS-0002-R124). ``findings`` names each difference.
 EVENT_ALLOWLIST_MISMATCH = "pd_allowlist_mismatch"
 EVENT_DAEMON_START = "pd_daemon_start"
+#: The session unit's wrapper started its session in its pane: once at start, and again after
+#: each restart in place (MacEff #726). ``wrapper_pid``, ``wrapper_start``, ``pane_pid`` and
+#: ``respawns`` (0 at start). A wrapper that has announced one can restart its session in place,
+#: so the daemon sends it SIGUSR1 rather than restarting the unit whole.
+EVENT_SESSION_PANE = "pd_session_pane"
 #: An operator's rule for the event stream: what its rules in force fold to (persistent_layer 3.4).
 EVENT_STREAM_RULE = "pd_stream_rule"
 
@@ -951,7 +1048,7 @@ class Liveness(_Closed):
       that (MIS-0002-R22 (layer_MUST-NOT_restart_waiting_unit)).
     - ``auth_failed``: what the harness said when it could not authenticate, while it can't;
       the daemon reads the session failed until it can again
-      (MIS-0002-R19 (auth_failure_MUST_read_failed)).
+      (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person)).
     """
 
     agent: str
@@ -991,6 +1088,15 @@ class UnitState(_Closed):
     #: The host boot this was recorded in (Linux's ``boot_id``), so a later daemon adopts
     #: the pid only within the same boot. None where the platform has no boot id.
     boot_id: Optional[str] = None
+    #: When the state began, in epoch seconds, for a record that repeats a state already recorded
+    #: (a unit still failed for its login, recorded again each day). The readout takes how long a
+    #: unit has been in its state from this when it is present, else from the record's own time,
+    #: so a repeat never makes a failure look as new as the repeat (#896).
+    since: Optional[float] = None
+    #: What a unit ``waiting_on_a_person`` waits on, as data: ``LOGIN_WAIT`` or ``CREDENTIAL_WAIT`` for a session that
+    #: can't authenticate (MIS-0002-R19). None for a prompt, whose words are in the reason, and
+    #: for every other state.
+    waiting_on: Optional[str] = None
 
 
 class Asker(_Closed):
@@ -1228,6 +1334,8 @@ class ActRequest(_Closed):
     unit: str
     asked_by: Asker
     reason: str = Field(min_length=1)
+    #: A restart of the session unit that ends its tmux server even with a client attached (#1055).
+    server: bool = False
 
 
 class CompactRequest(_Closed):
@@ -1405,8 +1513,12 @@ class UnitStatus(_Closed):
     restart_held_until: Optional[str] = None
     #: A capture unit's microphone as its last credited beat said (MIS-0008 R16).
     microphone: Optional[MicrophoneState] = None
-    #: What the client said while it can't log in, on a session held failed for its login (MIS-0002-R19
-    #: (auth_failure_MUST_read_failed)). That session still runs, so a person can attach and log in.
+    #: What a unit ``waiting_on_a_person`` waits on, as data: ``LOGIN_WAIT`` or ``CREDENTIAL_WAIT`` for a session that can't
+    #: authenticate (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person)). The status and the attach
+    #: key on this, never on ``auth_failed``'s words. That session still runs, so a person can attach
+    #: and log in.
+    waiting_on: Optional[str] = None
+    #: What the client said while it can't log in, for the person reading the status.
     auth_failed: Optional[str] = None
 
 

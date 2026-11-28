@@ -16,11 +16,20 @@ The steps, each skippable by its flag:
    channels the declaration allows, the MacEff Notification Channel included;
 5. ``channel`` - the MacEff Notification Channel plugin from the marketplace packaged with macf;
 6. ``permissions`` - the mode-safety permission entries;
-7. ``daemon`` - the daemon under the platform's service manager (``pd install``).
+7. ``framework`` - whether the hooks and the ``/maceff`` skills and commands are installed, and the
+   command that installs them (``framework install``) when they are not;
+8. ``telegram-dir`` - for a declaration that names a Telegram channel, where the plugin keeps its poller
+   files, from what, and a flag on the account-wide default that agents on one login would share;
+9. ``daemon`` - the daemon under the platform's service manager (``pd install``);
+10. ``mail`` - for an agent with an address: its signing key, signing every message, a peer from
+    ``--peer CARD``, and on a host the broker as a declared unit of its own daemon;
+11. ``registry`` - the agent's key in the operator's registry, the root step printed.
 
-``pd install`` comes last although it is the heart of the stack: the daemon starts the session
-unit as soon as it starts, and that session needs the child script, the channel plugin and its
-permissions already in place.
+``pd install`` comes last of the steps the session needs, although it is the heart of the stack: the
+daemon starts the session unit as soon as it starts, and that session needs the child script, the
+channel plugin and its permissions already in place. ``mail`` and ``registry`` follow it because the
+session needs nothing they write at its start (mail is read when it arrives), and the registry
+step declares the key the mail step may have just made.
 """
 import argparse
 import contextlib
@@ -59,11 +68,31 @@ STEPS: List[Tuple[str, str, str]] = [
                  "maceff-voice-input-channel@maceff where the declaration has a voice section"), "no_channel"),
     ("permissions", "add the mode-safety permission entries to the project's settings.local.json",
      "no_permissions"),
+    ("framework", ("check that the hooks and the /maceff skills and commands are installed, and "
+                   "name the command that installs them when they are not (framework install)"),
+     "no_framework"),
+    ("telegram-dir", ("say where the Telegram plugin keeps its poller files and from what, and flag the "
+                      "account-wide default that agents and sessions on one login would share (#1069)"),
+     "no_telegram_dir"),
     ("daemon", "put the primal daemon under the service manager (pd install)", "no_daemon"),
+    ("mail", ("for an agent with an address (.maceff/amail.json): make its signing key if absent, declare "
+              "signing every message, declare a peer from --peer CARD, and on a host give the broker a "
+              "declared unit of its own daemon; the operator's steps printed"), "no_mail"),
     ("registry", ("declare the agent's signing key in the operator's registry, the change shown "
                   "first; on a host the write is root's, printed as one step (MIS-0004 R42)"),
      "no_registry"),
 ]
+
+#: The steps that read the agent's calling card, which the calling-card step writes first.
+NEEDS_CARD = ("declaration", "harness", "daemon")
+#: What those steps say when the home has no card yet.
+NO_CARD_PHRASE = "names no agent"
+
+
+def _card_step_would_name(results: "List[Result]") -> bool:
+    """Whether the calling-card step, already run under --plan, found it would write the card."""
+    return any(r.step == "calling-card" and r.status == WOULD for r in results)
+
 
 #: The steps ``--update`` runs: the declaration only to report its drift, the channel and the
 #: daemon to bring them current. The rest belong to a first init.
@@ -94,6 +123,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
                              "harness's recorded choice, else MACEFF_PROJECT_DIR, else the agent home)")
     parser.add_argument("--telegram", action=argparse.BooleanOptionalAction, default=None,
                         help="declare the Telegram channel (default: when this login already uses it)")
+    parser.add_argument("--peer", default=None, metavar="CARD",
+                        help="with the mail step: a peer broker's card (its JSON, or a file holding it) to "
+                             "declare, as `amail peer add` does")
     parser.add_argument("--update", action="store_true",
                         help="bring the persistent-layer stack current and nothing else: reinstall the "
                              "daemon's unit as rendered now, restart the daemon onto this macf (its units, "
@@ -759,7 +791,34 @@ def _plugin_state(login_home: Path) -> Tuple[set, set]:
     return known, installed
 
 
+def _channel_command_problem() -> Optional[str]:
+    """Why Claude Code can't start the channel plugin's server, or None when it can (#1051).
+
+    The plugin's ``.mcp.json`` runs ``maceff-channel`` by that bare name. With a virtual-environment
+    install the console script lives only in the environment's ``bin/``, so Claude Code reports
+    ``Executable not found in $PATH: stdio`` at every session start, naming neither the command nor the
+    plugin. The installer's own PATH stands in for Claude Code's, which is the closest it can see."""
+    from macf.channels.marketplace import CHANNEL_COMMAND
+    if shutil.which(CHANNEL_COMMAND):
+        return None
+    beside = Path(sys.executable).parent / CHANNEL_COMMAND
+    where = (f"this install has it at {beside}" if beside.exists()
+             else f"it is not beside this Python ({beside.parent}) either")
+    return (f"the {CHANNEL_COMMAND} command is not on PATH, so Claude Code can't start the plugin's server "
+            f"(it reports 'Executable not found in $PATH: stdio' at session start); {where}. Put it on the "
+            f"PATH Claude Code starts with, for example ln -s {beside} ~/.local/bin/{CHANNEL_COMMAND}")
+
+
 def step_channel(ctx: Context) -> Result:
+    result = _install_channel(ctx)
+    problem = _channel_command_problem()
+    if problem and result.status in (DONE, ALREADY, WOULD):
+        done = f"{result.detail}; but " if result.detail else ""
+        return Result("channel", REFUSED, f"{done}{problem}")
+    return result
+
+
+def _install_channel(ctx: Context) -> Result:
     from macf.channels.marketplace import CHANNEL_PLUGIN_ID, MARKETPLACE, VOICE_PLUGIN_ID, packaged_marketplace
     known, installed = _plugin_state(ctx.login_home)
     update = getattr(ctx.args, "update", False)
@@ -829,6 +888,91 @@ def step_permissions(ctx: Context) -> Result:
     return Result("permissions", DONE, f"{added} entr{'y' if added == 1 else 'ies'} added to {where}")
 
 
+def step_framework(ctx: Context) -> Result:
+    """Whether the framework's hooks and ``/maceff`` skills or commands are installed (#1049).
+
+    ``agent init`` writes the daemon, the harness and the channel, but the hooks and the ``/maceff``
+    skills and commands come from ``framework install``, which works on the directory it is run in.
+    Without them the agent starts with no hooks bound and no commands, and nothing said so. This step
+    looks, and when something is missing it is reported found with drift, naming the command and where
+    to run it. It installs nothing, because that command writes settings in the directory it is run
+    from, and it never fails the run. Hooks count where either place binds them: the project's
+    ``settings.local.json`` (``framework install``'s mode) or the home's ``settings.json`` (the global
+    mode); the ``/maceff`` artifacts count as installed when either the skills or the commands
+    directory holds one, since the commands are pointers to skills."""
+    if ctx.in_container:
+        return Result("framework", SKIPPED, CONTAINER_OWNS)
+    from macf.cli import _count_hook_events_in_settings, _hooks_to_install_list
+    root = project_dir(ctx)
+    expected = len(_hooks_to_install_list())
+    places = (root / ".claude" / "settings.local.json", Path.home() / ".claude" / "settings.json")
+    bound = max(_count_hook_events_in_settings(p) for p in places)
+
+    def _has_maceff(folder: Path, prefix: str) -> bool:
+        return folder.is_dir() and any(e.name.startswith(prefix) for e in folder.iterdir())
+
+    has_artifacts = (_has_maceff(root / ".claude" / "skills", "maceff-")
+                     or _has_maceff(root / ".claude" / "commands", "maceff"))
+    if bound == expected and has_artifacts:
+        return Result("framework", ALREADY, f"{bound} hook events bound and the /maceff skills or commands "
+                                            f"installed (looked in {root / '.claude'} and {Path.home() / '.claude'})")
+    missing = ([f"hooks ({bound} of {expected} events bound)"] if bound != expected else []) + \
+              (["the /maceff skills and commands"] if not has_artifacts else [])
+    return Result("framework", DRIFT, f"{' and '.join(missing)} not installed (looked in {root / '.claude'} and "
+                                      f"{Path.home() / '.claude'}); run `cd {root} && macf_tools framework install` "
+                                      f"to install them. This step never fails the run")
+
+
+def step_telegram_dir(ctx: Context) -> Result:
+    """Where the Telegram plugin keeps its poller files for this seat, and from what (#1069).
+
+    Agents on one login are separated for Telegram only by ``TELEGRAM_STATE_DIR`` in each one's own
+    settings ``env``, which gives each its own state directory and so its own bot. An agent without it
+    uses the account-wide default, and the plugin ends an older poller when a newer one starts on the
+    same directory, so another agent on the login, or a session started from another directory, can take
+    the bot's polling from the agent that owns it. Which agents sit on the default is recorded nowhere
+    a check could read, so this step does not refuse it: it says where the files are and from what
+    (the same resolution the outside watch judges the poller by), and reports the default found with
+    drift, naming the setting. It writes nothing and never fails the run."""
+    if ctx.in_container:
+        return Result("telegram-dir", SKIPPED, CONTAINER_OWNS)
+    from pydantic import ValidationError
+
+    from macf.pd import interface, watch
+    try:
+        declaration = interface.Declaration.model_validate_json(interface.declaration_path(ctx.home).read_text())
+    except FileNotFoundError:
+        return Result("telegram-dir", SKIPPED, "no declaration yet, so no Telegram channel is declared")
+    except (OSError, ValidationError, ValueError) as e:
+        return Result("telegram-dir", SKIPPED, f"the declaration can't be read ({type(e).__name__}), so whether "
+                                               f"a Telegram channel is declared isn't known")
+    if not watch.declares_telegram(declaration):
+        return Result("telegram-dir", SKIPPED, "the declaration names no Telegram channel")
+    session = watch.session_places(declaration, ctx.home)
+    project = session.project_dir
+    where, source = watch.telegram_state_dir(ctx.home, project_dir=project, login_home=session.login_home,
+                                             unit_env=session.environment)
+    if source == watch.LOGIN_SETTINGS_SOURCE:
+        return Result("telegram-dir", DRIFT,
+                      f"the Telegram plugin keeps its poller files in {where}, named in the login's own "
+                      f"settings.json, which every agent on this login reads: they all share that one "
+                      f"directory, and so one bot, and a newer poller on it ends the older. For a seat of "
+                      f"its own, set TELEGRAM_STATE_DIR in the \"env\" of "
+                      f"{project / '.claude' / 'settings.local.json'}, which takes precedence. "
+                      f"This step never fails the run")
+    if source != "the default location":
+        return Result("telegram-dir", ALREADY, f"the Telegram plugin keeps its poller files in {where}, "
+                                               f"from {source}")
+    return Result("telegram-dir", DRIFT,
+                  f"the Telegram plugin will keep its poller files in {where}, the account-wide default. "
+                  f"A newer poller on a directory ends the older one, so another agent on this login, or a "
+                  f"session started from another directory, can take this bot's polling from it, and nothing "
+                  f"records who shares the default. For a seat of its own, set TELEGRAM_STATE_DIR in the "
+                  f"\"env\" of {project / '.claude' / 'settings.local.json'} to a directory that holds that "
+                  f"seat's own bot (the plugin's configure command writes its token and access there). "
+                  f"This step never fails the run")
+
+
 def _missing_permissions(root: Path) -> Optional[List[str]]:
     """The entries ensure_mode_safety_permissions would add, by its own lists, without writing."""
     from macf.utils import claude_settings as cs
@@ -849,7 +993,9 @@ def _declares_session(declaration: Optional[Dict]) -> bool:
 
 def daemon_session_pid(ctx: Context, declaration: Optional[Dict]) -> Optional[int]:
     """The pid of this agent's session unit, as its running daemon confirms it, or None: no
-    daemon answers, or it doesn't report the declared session unit up with a pid."""
+    daemon answers, or it doesn't report the declared session unit with a pid. In any state:
+    a unit whose session failed still runs the client beneath it, and a stale pid is never
+    an ancestor of a live client, so it can't claim one (#1072)."""
     names = [u.get("name") for u in (declaration or {}).get("units") or [] if u.get("kind") == "session"]
     if not names or not ctx.card:
         return None
@@ -862,8 +1008,7 @@ def daemon_session_pid(ctx: Context, declaration: Optional[Dict]) -> Optional[in
     if report.source != "daemon":
         return None
     for unit in report.units:
-        if unit.get("unit") == names[0] and unit.get("state") in ("running", "waiting_on_a_person") \
-                and unit.get("pid"):
+        if unit.get("unit") == names[0] and unit.get("pid"):
             return int(unit["pid"])
     return None
 
@@ -955,6 +1100,114 @@ def signing_key_path(home: Path, environ=os.environ) -> Path:
     return legacy if legacy.exists() else home / ".maceff" / "keys" / "amail_signing_key.pem"
 
 
+def step_mail(ctx: Context) -> Result:
+    """The agent's mail, for an agent that has an address (``.maceff/amail.json``): its signing key,
+    made if absent; signing every message declared (MIS-0004 R41); with ``--peer CARD``, that peer's
+    link and contact (amail policy 2.1.2); and on a host, the broker as a declared unit of its own
+    primal daemon (MIS-0002 R53, MIS-0007 R81). What only the operator may do is printed."""
+    try:
+        from macf.amail import host_daemon, peer_setup
+        from macf.amail.crypto import generate_keypair
+    except ImportError as e:
+        return Result("mail", SKIPPED, f"the amail extra isn't installed ({e})")
+    if ctx.in_container:
+        return Result("mail", SKIPPED, CONTAINER_OWNS)
+    conf_path = ctx.home / ".maceff" / "amail.json"
+    if not conf_path.exists():
+        return Result("mail", SKIPPED, f"this agent has no mail address yet ({conf_path} is absent; it names "
+                                       f"the agent, its domain and its broker)")
+    try:
+        conf = json.loads(conf_path.read_text())
+    except (OSError, ValueError) as e:
+        return Result("mail", REFUSED, f"{conf_path} can't be read: {e}")
+    lines: List[str] = []
+    acted = would = False
+    operator: List[str] = []
+
+    key = signing_key_path(ctx.home)
+    if not key.exists():
+        if ctx.dry_run:
+            lines.append(f"make a signing key at {key}")
+            would = True
+        else:
+            try:
+                lines.append(f"made a signing key at {key}: {generate_keypair(key)}")
+            except (ValueError, OSError) as e:
+                return Result("mail", REFUSED, f"could not make a signing key at {key}: {e}")
+            acted = True
+    if not conf.get("signing_required"):
+        if ctx.dry_run:
+            lines.append(f"declare signing every message (signing_required in {conf_path})")
+            would = True
+        else:
+            conf["signing_required"] = True
+            mode = conf_path.stat().st_mode & 0o777
+            beside = conf_path.with_name(f".{conf_path.name}.new")
+            beside.write_text(json.dumps(conf, indent=2) + "\n")
+            os.chmod(beside, mode)
+            os.replace(beside, conf_path)
+            lines.append(f"declared signing every message in {conf_path}")
+            acted = True
+
+    broker_config = Path(conf["broker_config"]) if conf.get("broker_config") else None
+    peer = getattr(ctx.args, "peer", None)
+    if peer:
+        if broker_config is None:
+            return Result("mail", REFUSED, f"--peer needs a broker, and {conf_path} names no broker_config")
+        try:
+            text = Path(peer).read_text() if not peer.lstrip().startswith("{") else peer
+            added = peer_setup.plan_add(broker_config, peer_setup.parse_card(text), local_agents=[conf["agent"]])
+        except (peer_setup.CardError, OSError, KeyError) as e:
+            return Result("mail", REFUSED, f"--peer: {e}")
+        if added.changed:
+            if ctx.dry_run:
+                lines.append(f"declare the peer link and contact:\n{added.diff()}")
+                would = True
+            else:
+                added.write(backup_suffix=".bak-agent-init")
+                lines.append("declared the peer link and contact; the broker reads them at its next start")
+                acted = True
+        operator.extend(added.registry_lines)
+
+    elsewhere = None
+    if broker_config is not None:
+        try:
+            homes = [b.home for b in peer_setup._load(broker_config)[1].agents.values() if b.home]
+        except peer_setup.CardError as e:
+            return Result("mail", REFUSED, f"the broker config: {e}")
+        elsewhere = host_daemon.declared_broker(broker_config, homes)
+        if elsewhere is not None:
+            lines.append(f"the broker is already unit {elsewhere.unit!r} of {elsewhere.card}'s daemon")
+    if broker_config is not None and elsewhere is None:
+        interim = host_daemon.interim_jobs(ctx.login_home / "Library" / "LaunchAgents") \
+            if sys.platform == "darwin" else []
+        try:
+            unit = host_daemon.plan(broker_config, python=unit_python(), account=pwd.getpwuid(os.getuid()).pw_name,
+                                    path_dirs=os.environ.get("PATH", "").split(":"),
+                                    pythonpath=os.environ.get("PYTHONPATH") or None, interim_plists=interim)
+        except host_daemon.HostDaemonError as e:
+            return Result("mail", REFUSED, f"the broker's daemon: {e}")
+        if unit.files:
+            if ctx.dry_run:
+                lines.append(f"write the broker daemon {unit.card}'s identity and declaration in {unit.home}")
+                would = True
+            else:
+                unit.write()
+                lines.append(f"wrote the broker daemon {unit.card}'s identity and declaration in {unit.home}")
+                acted = True
+        if unit.files or interim or not pd_unit_installed(unit.card, unit.home):
+            operator.extend(unit.steps)
+
+    if operator:
+        lines.append("For the operator:\n" + "\n".join(f"  {s}" for s in operator))
+    detail = "\n".join(lines) or "the key, signing and the broker's daemon are as they should be"
+    if ctx.dry_run and (would or operator):
+        return Result("mail", WOULD, detail)
+    if operator:
+        return Result("mail", PLANNED, detail)
+    return Result("mail", DONE if acted else ALREADY, detail)
+
+
 def step_registry(ctx: Context) -> Result:
     """Declare the agent's signing key in the operator's registry (MIS-0004 R42), as the operator
     ruled on #927: transparently, the change shown and, on a host, the exact root step printed for
@@ -1003,7 +1256,10 @@ RUNNERS: Dict[str, Callable[[Context], Result]] = {
     "harness": step_harness,
     "channel": step_channel,
     "permissions": step_permissions,
+    "framework": step_framework,
+    "telegram-dir": step_telegram_dir,
     "daemon": step_daemon,
+    "mail": step_mail,
     "registry": step_registry,
 }
 
@@ -1061,6 +1317,13 @@ def run_stack(args: argparse.Namespace, home: Path, *, in_container: bool,
             result = preamble() if step == "preamble" else RUNNERS[step](ctx)
         except Exception as e:  # noqa: BLE001 - one step's defect is reported, the rest still run
             result = Result(step, REFUSED, f"{type(e).__name__}: {e}")
+        if plan and result.status == REFUSED and step in NEEDS_CARD and _card_step_would_name(results) \
+                and NO_CARD_PHRASE in result.detail:
+            # The calling-card step creates the file this step reads, so in a real run it proceeds.
+            # A plan that called it refused read, to a newcomer, as an init that fails at half its
+            # steps (#860 item 1).
+            result = Result(step, WOULD, "once the calling card is written, as the step before it does; "
+                                         "it can't be checked until then")
         if result.status == REFUSED:
             ctx.refused[step] = result.detail
         results.append(result)

@@ -137,7 +137,8 @@ def _unit_health(unit: str, state_event: Optional[dict], live_event: Optional[di
     known = {
         "unit": unit,
         "state": _str_or_none(state_data.get("state")),
-        "since": _float_or_none((state_event or {}).get("timestamp")),
+        # A repeat of a state already recorded says when the state began; any other record began it.
+        "since": _float_or_none(state_data.get("since")) or _float_or_none((state_event or {}).get("timestamp")),
         "reason": str(state_data.get("reason") or ""),
     }
     reading = read_liveness(live_event, now, probe)

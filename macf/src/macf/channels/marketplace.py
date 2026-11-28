@@ -14,6 +14,9 @@ from pathlib import Path
 MARKETPLACE = "maceff"
 #: The channel plugin it carries.
 CHANNEL_PLUGIN = "maceff-notification-channel"
+#: The console script the plugin's ``.mcp.json`` runs as its server. Claude Code starts it by this bare
+#: name, so it has to be on the PATH Claude Code starts with (a test holds the file to this name).
+CHANNEL_COMMAND = "maceff-notification-channel"
 #: ``maceff-notification-channel@maceff``, the id ``claude plugin install`` takes.
 CHANNEL_PLUGIN_ID = f"{CHANNEL_PLUGIN}@{MARKETPLACE}"
 #: The channel as the harness's ``--channels`` takes it.

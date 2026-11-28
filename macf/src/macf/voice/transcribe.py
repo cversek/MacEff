@@ -145,37 +145,9 @@ def transcribe_mlx(wav_path: str, model: str = "mlx-community/whisper-large-v3-t
     )
 
 
-def transcribe_faster_whisper(wav_path: str, model: str = "large-v3-turbo",
-                              language: str = "en", initial_prompt: Optional[str] = None) -> TranscriptResult:
-    """Transcribe using faster-whisper (Linux and containers; the GPU when CUDA loads, else the CPU)."""
-    from faster_whisper import WhisperModel
-
-    try:
-        whisper_model = WhisperModel(model, device="cuda", compute_type="float16")
-    except (RuntimeError, ValueError) as e:
-        print(f"⚠️ MACF: faster-whisper can't use the GPU ({e}); transcribing on the CPU", file=sys.stderr)
-        whisper_model = WhisperModel(model, device="cpu", compute_type="int8")
-
-    kwargs = {"language": language}
-    if initial_prompt:
-        kwargs["initial_prompt"] = initial_prompt
-
-    t0 = time.time()
-    seg_iter, info = whisper_model.transcribe(wav_path, **kwargs)
-    segments = [TranscriptSegment(text=s.text.strip(), start=s.start, end=s.end,
-                                  confidence=1.0 - getattr(s, "no_speech_prob", 0.0))
-                for s in seg_iter]          # the iterator decodes lazily, so time it whole
-    elapsed = time.time() - t0
-
-    return TranscriptResult(
-        text=" ".join(s.text for s in segments).strip(),
-        segments=segments,
-        language=getattr(info, "language", None) or language,
-        engine="faster-whisper",
-        model=model,
-        duration_audio=segments[-1].end if segments else 0.0,
-        duration_transcribe=elapsed,
-    )
+#: Set once a CPU transcription has worked after the GPU failed, so later calls in this process don't
+#: build the CUDA model and fail on it again (#1024).
+_faster_whisper_cpu_only = False
 
 
 def transcribe_whisper(wav_path: str, model: str = "turbo",
@@ -233,11 +205,12 @@ DEFAULT_MODELS = {"mlx": "mlx-community/whisper-large-v3-turbo", "faster-whisper
                   "whisper": "turbo"}
 
 
-def _faster_whisper_model(model: str):
-    key = ("faster-whisper", model)
+def _faster_whisper_model(model: str, device: str = "cuda", compute_type: str = "float16"):
+    """The model for *device*, loaded once per process (a capture unit transcribes many times)."""
+    key = ("faster-whisper", model, device)
     if key not in _LOADED:
         from faster_whisper import WhisperModel
-        _LOADED[key] = WhisperModel(model, device="auto", compute_type="default")
+        _LOADED[key] = WhisperModel(model, device=device, compute_type=compute_type)
     return _LOADED[key]
 
 
@@ -266,13 +239,29 @@ def transcribe_faster_whisper(audio, model: str = "large-v3-turbo", language: st
     """Transcribe with faster-whisper, the Linux engine. ``audio`` is a WAV path, or float32
     samples at 16 kHz held in memory, which is how a capture unit calls it (MIS-0008 R13). ``max_tokens``
     caps a short check (a wake phrase, a stop word), so a loop costs a moment rather than the token limit."""
-    whisper_model = _faster_whisper_model(model)
+    global _faster_whisper_cpu_only
     t0 = time.time()
     capped = {"without_timestamps": True, "max_new_tokens": max_tokens} if max_tokens else FULL_DECODE
-    found, info = whisper_model.transcribe(audio, language=language, initial_prompt=initial_prompt,
-                                           **BOUNDED_DECODE, **capped)
-    segments = [TranscriptSegment(text=s.text.strip(), start=s.start, end=s.end, confidence=1.0 - s.no_speech_prob)
-                for s in found]       # the generator does the work, so the time is taken after it
+
+    def decode(device: str, compute_type: str):
+        # The model builds, and the audio decodes lazily as the segments are read. CUDA often fails
+        # only at the first inference, when cuDNN or cuBLAS is loaded, so the read belongs in here (#1024).
+        found, info = _faster_whisper_model(model, device, compute_type).transcribe(
+            audio, language=language, initial_prompt=initial_prompt, **BOUNDED_DECODE, **capped)
+        return [TranscriptSegment(text=s.text.strip(), start=s.start, end=s.end,
+                                  confidence=1.0 - s.no_speech_prob) for s in found], info
+
+    if _faster_whisper_cpu_only:
+        segments, info = decode("cpu", "int8")
+    else:
+        try:
+            segments, info = decode("cuda", "float16")
+        except (RuntimeError, ValueError) as e:
+            _LOADED.pop(("faster-whisper", model, "cuda"), None)   # a model that failed is not kept
+            print(f"⚠️ MACF: faster-whisper can't use the GPU ({e}); transcribing on the CPU", file=sys.stderr)
+            segments, info = decode("cpu", "int8")
+            # Remembered only once the CPU worked, so a bad recording doesn't turn the GPU off for good.
+            _faster_whisper_cpu_only = True
     return _segments_result(segments, " ".join(s.text for s in segments), info.language or language,
                             "faster-whisper", model, time.time() - t0)
 

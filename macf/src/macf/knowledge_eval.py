@@ -55,7 +55,9 @@ LABEL_SOURCES = ("xref", "citations", "same_subject")
 EVENT_SEALED = "knowledge_eval_sealed"
 EVENT_HELD_RUN = "knowledge_eval_held_run"
 
-_LEARNING_FILE = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}_[A-Za-z0-9_\-]+?_learning\.md)")
+#: A dated artifact file, as the learnings CLI names one (``<date>_<time>_<slug>.md``), with or without a
+#: ``_learning`` suffix. Its callers keep only names that resolve to a learning node (#1165).
+_LEARNING_FILE = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}_[A-Za-z0-9_\-]+?\.md)")
 _CITE = re.compile(r'\[(OBSERVATION|LEARNING|REFLECTION|JOTEWR|CCP|CHECKPOINT|EXPERIMENT|REPORT|ROADMAP|MISSION|IDEA)\s+'
                    r'(\d{4}-\d{2}-\d{2})[^"\]]*"([^"]+)"', re.I)
 _KIND_TYPES = {"observation": {"observations"}, "learning": {"learnings"}, "reflection": {"reflections"},
@@ -204,7 +206,10 @@ def _cross_references(text: str) -> str:
 
 
 def xref_labels(corpus: Corpus) -> Tuple[Dict[str, Set[str]], int]:
+    """Each learning's Cross-References to other learnings. A name that resolves to no node at all is
+    unresolved; one naming a dated artifact of another type is a link, just not a learning's."""
     by_file = {Path(v["path"]).name: k for k, v in corpus.nodes.items() if v["type"] == "learnings"}
+    any_file = {Path(v["path"]).name for v in corpus.nodes.values()}
     rel: Dict[str, Set[str]] = defaultdict(set)
     unresolved = 0
     for k, v in corpus.nodes.items():
@@ -214,7 +219,7 @@ def xref_labels(corpus: Corpus) -> Tuple[Dict[str, Set[str]], int]:
             t = by_file.get(fn)
             if t and t != k:
                 rel[k].add(t)
-            elif not t:
+            elif not t and fn not in any_file:
                 unresolved += 1
     return dict(rel), unresolved
 
@@ -252,17 +257,19 @@ def citation_labels(corpus: Corpus) -> Tuple[Dict[str, Set[str]], int]:
 def same_subject_labels(corpus: Corpus, index_text: Optional[str]) -> Tuple[Dict[str, Set[str]], int]:
     if not index_text:
         return {}, 0
+    # A cluster is what the learnings CLI reads as one, so the two never disagree: structural headings
+    # such as a CEP navigation guide are not clusters, a heading's "(N)" count is optional, and an entry
+    # line names its own file (#1165, review).
+    from macf.learnings_index import parse_index
     by_file = {Path(v["path"]).name: k for k, v in corpus.nodes.items() if v["type"] == "learnings"}
     clusters: Dict[str, Set[str]] = defaultdict(set)
-    current, unresolved = None, 0
-    for line in index_text.splitlines():
-        if line.startswith("## "):
-            current = line[3:].strip()
-            continue
-        for fn in _LEARNING_FILE.findall(line):
-            if current and fn in by_file:
-                clusters[current].add(by_file[fn])
-            elif current:
+    unresolved = 0
+    for name, info in parse_index(index_text).items():
+        for fn in info["files"]:
+            fn = Path(fn).name
+            if fn in by_file:
+                clusters[name].add(by_file[fn])
+            else:
                 unresolved += 1
     rel: Dict[str, Set[str]] = defaultdict(set)
     for members in clusters.values():
@@ -495,7 +502,12 @@ def evaluate(corpus: Corpus, rankers: Sequence[str], sources: Sequence[str] = LA
     known = {**RANKERS, **(extra_rankers or {})}
     for name in rankers:
         if name not in known:
-            raise EvalRefused(f"unknown ranker {name!r}; the rankers are {', '.join(sorted(known))}")
+            from .knowledge_eval_text import text_ranker
+            r = text_ranker(name)
+            if r is None:
+                raise EvalRefused(f"unknown ranker {name!r}; the rankers are {', '.join(sorted(known))}, "
+                                  f"bm25, dense, hybrid-cc[:ALPHA] and hybrid-rrf[:K]")
+            known[name] = r
     if compare:
         for name in compare:
             if name not in rankers:
@@ -503,14 +515,25 @@ def evaluate(corpus: Corpus, rankers: Sequence[str], sources: Sequence[str] = LA
     index_text = corpus.snap.get("learnings_index")
     chart = {"snapshot_sha256": corpus.digest, "taken_at": corpus.snap.get("taken_at"),
              "nodes": len(corpus.nodes), "web": len(corpus.web), "split": which, "split_seed": seed,
-             "sources": {}}
+             "context": getattr(corpus, "context", "plain"), "bootstrap": boot, "sources": {}}
     labelled, split_ids = {}, {}
     for s in sources:
         rel, unresolved = labels_for(corpus, s, index_text)
+        # An artifact outside the web can't be a --like query and can't be a target, so it is left
+        # out as a query and counted, not raised on (#1059). The doctor's unreachable count is the same set.
+        orphans = [q for q in rel if q not in corpus.web_set]
+        # The ranked list is cut to the web before scoring, so a target outside it can never be returned:
+        # it is dropped from the relevant sets too, and a query left with no target is left out.
+        orphan_targets = sum(len(v - corpus.web_set) for q, v in rel.items() if q in corpus.web_set)
+        rel = {q: v & corpus.web_set for q, v in rel.items() if q in corpus.web_set}
+        no_target = [q for q, v in rel.items() if not v]
+        rel = {q: v for q, v in rel.items() if v}
         dev, held = split(rel, seed)
         labelled[s], split_ids[s] = rel, (dev, held)
         chart["sources"][s] = {"queries": len(rel), "pairs": sum(len(v) for v in rel.values()),
-                               "unresolved": unresolved, "dev": len(dev), "held": len(held)}
+                               "unresolved": unresolved, "dev": len(dev), "held": len(held),
+                               "orphan_queries": len(orphans), "orphan_targets": orphan_targets,
+                               "no_target_queries": len(no_target)}
         if s == "same_subject" and not index_text:
             chart["sources"][s]["note"] = "no learnings index in this snapshot"
     sealed, held_runs = seal_state(events(), seed)
@@ -532,6 +555,8 @@ def evaluate(corpus: Corpus, rankers: Sequence[str], sources: Sequence[str] = LA
         for s in sources:
             qs = split_ids[s][0 if which == "dev" else 1]
             audit = leak_audit(r, qs, labelled[s], corpus)
+            if r.reads is not None:
+                chart.setdefault("leak_share", {}).setdefault(name, {})[s] = round(audit.share, 4)
             if audit.unauditable:
                 chart.setdefault("unauditable", {}).setdefault(name, {})[s] = audit.unauditable
             if audit.share > LEAK_LIMIT:
@@ -579,13 +604,23 @@ def format_report(out: dict) -> str:
     if c["seal"]["held_set_changed_since_sealing"]:
         lines.append(f"   note: the held set of {', '.join(c['seal']['held_set_changed_since_sealing'])} "
                      f"has changed since sealing, as the corpus grew")
+    if c.get("context", "plain") != "plain" or c.get("leak_share"):
+        lines.append(f"   context {c.get('context', 'plain')}, {c.get('bootstrap', BOOTSTRAP)} bootstrap resamples")
+    if c.get("model_contexts") is not None:
+        lines.append(f"   model-written contexts for {c['model_contexts']} of the {c['web']} artifacts in the web")
+    for name, by in c.get("leak_share", {}).items():
+        lines.append(f"   leak audit, {name}: " + ", ".join(f"{s} {v:.1%}" for s, v in by.items()))
     for name, by in c.get("unauditable", {}).items():
         lines.append(f"   leak audit, {name}: " + ", ".join(f"{n} {s} pairs unauditable (no name to search for)"
                                                       for s, n in by.items()))
     for s, info in c["sources"].items():
         extra = f", {info['note']}" if info.get("note") else ""
+        left_out = "".join(f", {info[k]} {what}" for k, what in (
+            ("orphan_queries", "queries left out as outside the web"),
+            ("orphan_targets", "targets left out as outside the web"),
+            ("no_target_queries", "queries left out with no target in the web")) if info.get(k))
         lines.append(f"   {s}: {info['queries']} queries, {info['pairs']} pairs, {info['unresolved']} unresolved, "
-                     f"{info['dev']} dev, {info['held']} held{extra}")
+                     f"{info['dev']} dev, {info['held']} held{left_out}{extra}")
     for s, by in out["results"].items():
         lines.append(f"\n{s}")
         lines.append(f"   {'ranker':<10} {'MRR':>22} {'nDCG@10':>22} {'R@50':>22} {'returned':>9}")

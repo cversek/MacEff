@@ -53,7 +53,7 @@ JSON, validated closed: an unknown key is refused, because a key the daemon igno
 | `optional` | no | never delays another unit [MIS-0002-R58 (optional_unit_MUST-NOT_delay_others)] |
 | `privacy_grants` | no | macOS grants from a closed list: `local_network`, `accessibility`, `full_disk_access`, `keychain`, `automation:<bundle id>` |
 
-**Placeholders.** A command or environment value may use `{agent_home}`, `{card}` and `{runtime_dir}`. The daemon fills them in when it renders the unit at start [MIS-0002-R13 (pd_MUST_render_env_at_start)], because the same agent's home differs between a host and a container. Any other placeholder is refused, so the environment stays the declared one [MIS-0002-R12 (pd_MUST_start_units_itself)].
+**Placeholders.** A command or environment value may use `{agent_home}`, `{card}`, `{runtime_dir}` and `{python}`, the daemon's own interpreter. The daemon fills them in when it renders the unit at start [MIS-0002-R13 (pd_MUST_render_env_at_start)], because the same agent's home differs between a host and a container. Any other placeholder is refused, so the environment stays the declared one [MIS-0002-R12 (pd_MUST_start_units_itself)].
 
 **A schedule** is declared now, although step 2 runs it, so the format does not change under the later steps.
 - **Missed-run policy:** no default; a schedule without one is refused [MIS-0002-R109 (CI_MUST_fail_schedule_without_policy)]. The policy is `skip`, `run_once`, `run_once_in_window` with its window, or `report_only` [MIS-0002-R25 (missed-run_policy_MUST_be_listed)].

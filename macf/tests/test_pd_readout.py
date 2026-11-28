@@ -344,11 +344,14 @@ def test_a_run_waiting_as_declared_or_never_started_is_not_overdue():
     assert schedule_health(_scheduled(), never, H10 + 600)[0].verdict == "FAILED"
 
 
-def test_auth_failure_is_failed(tmp_path):
-    """MIS-0002-R19 (auth_failure_MUST_read_failed): the session's harness adapter reads a failed
-    login from the transcript, in the shapes Claude Code writes it, and says so in the session's
-    beat until a request goes through again; the daemon, hearing that beat, sets the session's
-    state to failed with what the client said, and the readout reads it so."""
+def test_auth_failure_waits_on_login(tmp_path):
+    """MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person): the session's harness adapter reads a
+    failed login from the transcript, in the shapes Claude Code writes it, and says so in the
+    session's beat until a request goes through again. The daemon, hearing that beat, sets the
+    session's state to waiting on a person with the login named as data, keeps the same process
+    running so a person can attach and log in, tells the wake it waits on its login, and returns
+    it to running once the beat says it can authenticate again."""
+    from macf.pd.interface import LOGIN_WAIT
     from macf.pd.liveness import liveness_event
     from macf.transcript_monitor.daemon import AuthWatch
     import test_primal_daemon as tpd
@@ -366,7 +369,7 @@ def test_auth_failure_is_failed(tmp_path):
     token = ('API Error: 401 {"type":"error","error":{"type":"authentication_error",'
              '"message":"OAuth token has expired."}}')
 
-    # The adapter: the transcript's shapes, one record per failure, recovery only by a real reply.
+    # The adapter: the transcript's shapes, one record per failure, recovery by a real reply.
     watch = AuthWatch()
     assert watch(reply) is None and watch.state() is None
     assert watch(said(expired)).event_name == "auth_failure_detected"
@@ -380,18 +383,153 @@ def test_auth_failure_is_failed(tmp_path):
     beat = liveness_event(CARD, "session", 10.0, pid=os.getpid(), auth_failed=watch.state())
     assert beat.auth_failed.startswith("API Error: 401")
 
-    # The daemon: a session whose beat carries the failure reads failed, and the readout says so.
+    # The daemon: a session whose beat carries the failure waits on its login, still running.
     script = tmp_path / "fake_unit.py"
     script.write_text(tpd.FAKE_UNIT)
-    unit = tpd.make_unit("session", script, {"auth_failed": expired})
-    core = tpd.Core(Declaration(version=1, agent=tpd.CARD, units=[unit]), tpd.CARD,
-                    backoff_base_s=0.05, backoff_cap_s=0.2)
+    unit = tpd.make_unit("session", script, {"auth_failed": expired, "auth_failed_for": 2.0}, restart="always"
+                         ).model_copy(update={"kind": "session"})
+    declaration = Declaration(version=1, agent=tpd.CARD, units=[unit])
+    core = tpd.Core(declaration, tpd.CARD, backoff_base_s=0.05, backoff_cap_s=0.2)
     try:
         core.boot()
-        assert tpd.drive(core, lambda: core.state("session") == "failed")
+        assert tpd.drive(core, lambda: core.state("session") == "waiting_on_a_person")
+        pid = core.statuses()[0].pid
         rows = [json.loads(line) for line in tpd.get_log_path().read_text().splitlines()]
-        found = health(Declaration(version=1, agent=tpd.CARD, units=[unit]), rows, time.time(),
-                       lambda pid, start: True)[0]
-        assert found.state == "failed" and found.reason == f"authentication failed: {expired}"
+        record = [r["data"] for r in rows if r.get("event") == "pd_unit_state"
+                  and r["data"].get("unit") == "session"][-1]
+        assert record["state"] == "waiting_on_a_person" and record["waiting_on"] == LOGIN_WAIT
+        assert record["reason"] == f"authentication failed: {expired}"
+        found = health(declaration, rows, time.time(), lambda pid, start: True)[0]
+        assert found.state == "waiting_on_a_person"
+        status = core.statuses()[0]
+        assert status.waiting_on == LOGIN_WAIT and status.auth_failed == expired and status.pid == pid
+        assert core.session_waiting_on() == "its login"     # the wake holds: nothing typed into /login
+        # Logged in again: the beat clears, and the same process is running again.
+        assert tpd.drive(core, lambda: core.state("session") == "running")
+        status = core.statuses()[0]
+        assert status.pid == pid and status.waiting_on is None and core.session_waiting_on() is None
     finally:
         core.shutdown("the test is over")
+
+
+def test_one_login_returns_every_session_waiting_on_it():
+    """Where sessions share one stored credential, a /login in one renews it for all. The others,
+    quiet, write no reply that would show it, so their monitors read the credential's expiry dates
+    instead and clear once they change (Ira on #1161, point 3). Two sessions wait; a person logs in
+    once; both are back. The dates alone are read, never a token."""
+    from macf.transcript_monitor.daemon import AuthWatch, CREDENTIAL_RECHECK_S
+    from macf.pd.login import credential_fingerprint
+    expired = {"type": "assistant", "isApiErrorMessage": True, "error": "authentication_failed",
+               "timestamp": "t", "message": {"role": "assistant", "model": "<synthetic>",
+                                             "content": [{"type": "text", "text": "Login expired"}]}}
+    stored = {"claudeAiOauth": {"accessToken": "secret-a", "refreshToken": "secret-r",
+                                "expiresAt": 1_000_000, "refreshTokenExpiresAt": 2_000_000}}
+    reads = []
+
+    def credential():
+        reads.append(1)
+        return credential_fingerprint(reader=lambda: json.dumps(stored))
+
+    clock = [0.0]
+    first, second = (AuthWatch(credential=credential, clock=lambda: clock[0]) for _ in range(2))
+    first(expired)
+    second(expired)
+    assert first.state() == second.state() == "Login expired"
+    clock[0] += CREDENTIAL_RECHECK_S
+    assert first.state() == second.state() == "Login expired", "nothing changed yet"
+    # A person runs /login in the first session only: the stored credential gets new dates.
+    stored["claudeAiOauth"].update(expiresAt=9_000_000, refreshTokenExpiresAt=8_000_000_000)
+    clock[0] += 1
+    assert first.state() == "Login expired", "read at most once a minute"
+    clock[0] += CREDENTIAL_RECHECK_S
+    assert first.state() is None and second.state() is None
+    assert "secret" not in repr(credential_fingerprint(reader=lambda: json.dumps(stored)))
+
+
+def test_a_credential_unread_at_the_failure_takes_its_next_reading_as_the_baseline():
+    """No reading at the failure, then one: that one is the baseline, not a change, so an unreadable
+    keychain at the moment of failure never clears the wait by itself."""
+    from macf.transcript_monitor.daemon import AuthWatch, CREDENTIAL_RECHECK_S
+    expired = {"type": "assistant", "isApiErrorMessage": True, "error": "authentication_failed",
+               "timestamp": "t", "message": {"role": "assistant", "model": "<synthetic>",
+                                             "content": [{"type": "text", "text": "Login expired"}]}}
+    answers = iter([None, (1.0, 2.0), (1.0, 2.0), (3.0, 4.0)])
+    clock = [0.0]
+    watch = AuthWatch(credential=lambda: next(answers), clock=lambda: clock[0])
+    watch(expired)                                   # the failure: unreadable (None)
+    for _ in range(2):
+        clock[0] += CREDENTIAL_RECHECK_S
+        assert watch.state() == "Login expired"      # the baseline, then the same again
+    clock[0] += CREDENTIAL_RECHECK_S
+    assert watch.state() is None                     # changed: logged in again
+
+
+def test_a_credential_that_wont_read_leaves_the_wait_and_says_so(capsys):
+    """A stored credential that isn't the client's JSON raises in the reader. The wait stands, since
+    nothing shows a login, and the monitor says why on its error stream rather than dropping it."""
+    from macf.transcript_monitor.daemon import AuthWatch, CREDENTIAL_RECHECK_S
+    from macf.pd.login import credential_fingerprint
+    expired = {"type": "assistant", "isApiErrorMessage": True, "error": "authentication_failed",
+               "timestamp": "t", "message": {"role": "assistant", "model": "<synthetic>",
+                                             "content": [{"type": "text", "text": "Login expired"}]}}
+    clock = [0.0]
+    watch = AuthWatch(credential=lambda: credential_fingerprint(reader=lambda: "not json"),
+                      clock=lambda: clock[0])
+    watch(expired)
+    clock[0] += CREDENTIAL_RECHECK_S
+    assert watch.state() == "Login expired"
+    assert "couldn't be read" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("said,kind", [
+    ("Login expired \u00b7 Please run /login", "login"),
+    ('API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}', "login"),
+    ("Invalid API key \u00b7 Fix external API key", "credential"),
+    ("authentication failed", "login"),
+    (None, "login"),
+])
+def test_what_the_adapter_read_names_the_wait(said, kind):
+    """MIS-0002-R19 names what the session waits on from what the client said: a rejected API key
+    waits on its credential, where no /login helps; every other failure waits on its login."""
+    from macf.pd.interface import auth_wait
+    assert auth_wait(said) == kind
+
+
+def test_a_seat_with_its_own_config_dir_reads_no_credential(monkeypatch):
+    """A seat with CLAUDE_CONFIG_DIR keeps its own credential, and the reader takes the default one, so
+    another seat's /login would end this seat's login wait. Until the reader follows the config dir, such
+    a seat reads no credential and its wait ends only by a reply (CTB's review of #1163)."""
+    import macf.budget as budget
+    from macf.pd.login import credential_fingerprint
+    stored = json.dumps({"claudeAiOauth": {"expiresAt": 1_000_000, "refreshTokenExpiresAt": 2_000_000}})
+    monkeypatch.setattr(budget, "read_credential", lambda: stored)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    assert credential_fingerprint() == ("refresh", 2000.0)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/home/seat/.claude-seat")
+    assert credential_fingerprint() is None
+
+
+def test_a_routine_refresh_ends_no_wait_and_only_a_new_login_does():
+    """The access token's end changes at every routine refresh. On a shared credential, a healthy session's
+    refresh must not end another session's login wait, or that session reads running while it still can't
+    authenticate. Only the refresh grant's end, which a new login moves, ends it; the access token's end
+    stands in only when no refresh grant is stated (Ira's review of #1163)."""
+    from macf.transcript_monitor.daemon import AuthWatch, CREDENTIAL_RECHECK_S
+    from macf.pd.login import credential_fingerprint
+    expired = {"type": "assistant", "isApiErrorMessage": True, "error": "authentication_failed",
+               "timestamp": "t", "message": {"role": "assistant", "model": "<synthetic>",
+                                             "content": [{"type": "text", "text": "Login expired"}]}}
+    stored = {"claudeAiOauth": {"expiresAt": 1_000_000, "refreshTokenExpiresAt": 2_000_000}}
+    clock = [0.0]
+    watch = AuthWatch(credential=lambda: credential_fingerprint(reader=lambda: json.dumps(stored)),
+                      clock=lambda: clock[0])
+    watch(expired)
+    stored["claudeAiOauth"]["expiresAt"] = 5_000_000                 # another session's routine refresh
+    clock[0] += CREDENTIAL_RECHECK_S
+    assert watch.state() == "Login expired"
+    stored["claudeAiOauth"]["refreshTokenExpiresAt"] = 9_000_000     # someone logged in again
+    clock[0] += CREDENTIAL_RECHECK_S
+    assert watch.state() is None
+    assert credential_fingerprint(reader=lambda: json.dumps({"claudeAiOauth": {"expiresAt": 3_000}})) == ("access", 3.0)
+    assert credential_fingerprint(reader=lambda: json.dumps({"claudeAiOauth": {}})) is None
+

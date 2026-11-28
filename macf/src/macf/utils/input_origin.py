@@ -160,7 +160,12 @@ def typed_by_framework(text: str, now: Optional[float] = None, *, consumer: str 
     from macf.agent_events_log import append_event, read_events
     cutoff = (time.time() if now is None else now) - KEYS_SENT_WINDOW_SECONDS
     sends, taken = {}, set()
-    for event in read_events(limit=None, reverse=True):
+    # Across the cycle boundary too: `inject compact` records its /compact in the cycle that ends,
+    # and the client writes the command's row in the one that starts, so a cycle-scoped read
+    # missed the record and counted the framework's keystroke as the operator (#653). The window
+    # bounds the read, not the cycle.
+    for event in read_events(limit=None, reverse=True, scope="all",
+                             only=[KEYS_SENT_EVENT, KEYS_MATCHED_EVENT]):
         stamp = event.get("timestamp")
         if isinstance(stamp, (int, float)) and stamp < cutoff:
             break
