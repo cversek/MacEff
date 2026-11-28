@@ -37,6 +37,24 @@ USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 USAGE_BETA = "oauth-2025-04-20"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 CREDENTIAL_FILE = Path.home() / ".claude" / ".credentials.json"
+
+
+def keychain_service() -> str:
+    """The Keychain item Claude Code keeps this login under. With CLAUDE_CONFIG_DIR set (a seat with a login of
+    its own, such as an organization's seat beside the operator's personal one), Claude Code suffixes the name with
+    the first 8 hex digits of the SHA-256 of that directory's path, so each config directory has its own login;
+    without it, the plain name. Reading the plain name from such a seat would report the other login's usage."""
+    import hashlib
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if not config_dir:
+        return KEYCHAIN_SERVICE
+    return f"{KEYCHAIN_SERVICE}-{hashlib.sha256(config_dir.encode()).hexdigest()[:8]}"
+
+
+def credential_file() -> Path:
+    """Where Claude Code keeps the credential where it uses a file: in CLAUDE_CONFIG_DIR if set, else ~/.claude."""
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(config_dir) / ".credentials.json" if config_dir else CREDENTIAL_FILE
 HISTORY = dt.timedelta(days=8)
 MIN_FETCH_INTERVAL = 180  # seconds between endpoint fetches unless --fresh
 MODES = ("conserve", "normal", "burn")
@@ -73,6 +91,7 @@ def keychain_accounts() -> list[str]:
     `security dump-keychain` without -d reads attributes only, so no secret passes through it. It does read the
     service and account names of every item in the keychain search list, on every fetch.
     """
+    service = keychain_service()
     try:
         r = subprocess.run(["security", "dump-keychain"], capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
@@ -80,7 +99,7 @@ def keychain_accounts() -> list[str]:
     items, cur = [], {}
     for line in r.stdout.splitlines() + ["keychain: end"]:
         if line.startswith("keychain: "):
-            if cur.get("svce") == KEYCHAIN_SERVICE and "acct" in cur:
+            if cur.get("svce") == service and "acct" in cur:
                 items.append((cur.get("mdat", ""), cur["acct"]))
             cur = {}
             continue
@@ -126,7 +145,7 @@ def read_credential() -> str:
         # no item holds any.
         for acct in keychain_accounts() or [None]:
             try:
-                r = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE]
+                r = subprocess.run(["security", "find-generic-password", "-s", keychain_service()]
                                    + (["-a", acct] if acct else []) + ["-w"],
                                    capture_output=True, text=True, timeout=10)
             except (OSError, subprocess.TimeoutExpired) as e:
@@ -139,9 +158,9 @@ def read_credential() -> str:
                 break
             if raw is None:
                 raw = r.stdout
-    if raw is None and CREDENTIAL_FILE.exists():
+    if raw is None and credential_file().exists():
         try:
-            raw = CREDENTIAL_FILE.read_text()
+            raw = credential_file().read_text()
         except OSError as e:
             raise BudgetError(f"credential file unreadable ({e.strerror}); use `budget sample --manual`",
                               short="credential unreadable")
@@ -243,10 +262,14 @@ def _recent(event: str, now: float, since: Optional[float] = None) -> Iterable[d
 
 
 def samples(since: Optional[float] = None, now: Optional[float] = None) -> list[dict]:
-    """Samples, oldest first: ``{t, source, limits}``."""
+    """Samples of the login this seat uses now, oldest first: ``{t, source, limits}``. A sample names the
+    Keychain item it was read under; one written before that field existed belongs to the plain item. Mixing
+    logins made a rate out of two accounts' percentages (+65%/h, seen when a seat changed login)."""
     now = now or time.time()
+    login = keychain_service()
     out = [{"t": e["timestamp"], "source": e["data"].get("source"), "limits": e["data"].get("limits", [])}
-           for e in _recent("budget_sampled", now, since) if since is None or e["timestamp"] >= since]
+           for e in _recent("budget_sampled", now, since)
+           if (since is None or e["timestamp"] >= since) and e["data"].get("login", KEYCHAIN_SERVICE) == login]
     return list(reversed(out))
 
 
@@ -324,7 +347,7 @@ def sample(fresh: bool = False, manual: Optional[str] = None,
             # A failed fetch leaves a record, so the hooks wait from it instead of asking again on every call (#852)
             append_event("budget_sample_failed", _failure(e))
             raise
-    append_event("budget_sampled", {"source": source, "limits": lim})
+    append_event("budget_sampled", {"source": source, "limits": lim, "login": keychain_service()})
     return {"t": now, "source": source, "limits": lim, "reused": False}
 
 
@@ -888,7 +911,29 @@ def hook_lines(which: str, now: Optional[float] = None) -> Optional[str]:
 
 
 
-def weekly_usage(now: Optional[float] = None) -> Optional[str]:
+def _usage(now: Optional[float] = None) -> tuple[Optional[str], Optional[str]]:
+    """("week" or "session", its figure) from one reading: the all-models week where the plan has one, else the
+    session limit (an organization seat reports the session and per-model weeks only). (None, None) when neither."""
+    week = weekly_usage(now=now)
+    if week:
+        return "week", week
+    session = weekly_usage(now=now, kind="session")
+    return ("session", session) if session else (None, None)
+
+
+def usage_line(now: Optional[float] = None, reading: Optional[tuple] = None) -> Optional[str]:
+    """The long form for the hooks' blocks: "Weekly usage: 38%" or "Session usage (5h): 4%". A GUARD."""
+    kind, value = reading or _usage(now)
+    return None if value is None else (f"Weekly usage: {value}" if kind == "week" else f"Session usage (5h): {value}")
+
+
+def usage_brief(now: Optional[float] = None, reading: Optional[tuple] = None) -> Optional[str]:
+    """The dashboard's field: "wk 38%" or "5h 4%". A GUARD, like weekly_usage."""
+    kind, value = reading or _usage(now)
+    return None if value is None else (f"wk {value}" if kind == "week" else f"5h {value}")
+
+
+def weekly_usage(now: Optional[float] = None, kind: str = "weekly_all") -> Optional[str]:
     """The all-models weekly limit and its burn rate, "42% (2%/hr)", for the hooks' lines.
 
     The percent is the newest sample's, the same record ``budget status`` reports. The rate is
@@ -905,8 +950,13 @@ def weekly_usage(now: Optional[float] = None) -> Optional[str]:
         now = now or time.time()
         floor = now - 4 * _tau_hours() * 3600
         points = []  # (t, percent, reset key), newest first
+        login = keychain_service()
         for e in _recent("budget_sampled", now):
-            w = next((l for l in e["data"].get("limits", []) if l.get("kind") == "weekly_all"), None)
+            if e["data"].get("login", KEYCHAIN_SERVICE) != login:
+                if e["timestamp"] < floor:
+                    break  # past the floor with only another login's samples: stop, don't walk the week
+                continue  # another login's sample (a seat that changed login) says nothing about this one
+            w = next((l for l in e["data"].get("limits", []) if l.get("kind") == kind), None)
             if w is not None and w.get("percent") is not None:
                 points.append((e["timestamp"], w["percent"], _reset_key(w.get("resets_at"))))
             elif not points:
@@ -931,6 +981,11 @@ def weekly_usage(now: Optional[float] = None) -> Optional[str]:
             return "reset since the last sample" + (f" ({age})" if age else "")
         rate = ewma_rate([(t, p) for t, p, k in reversed(points) if k == key])
         notes = [f"{format_rate(rate)}%/hr"] if rate is not None else []
+        if rate and rate > 0 and pct < 100:
+            # when the limit is met at this pace, if before the window resets: the question the operator asks
+            full_at = t_new + (100.0 - pct) / rate * 3600
+            if left is None or (full_at - now) / 3600 < left:
+                notes.append("full ~" + dt.datetime.fromtimestamp(full_at).strftime("%H:%M"))
         if age:
             notes.append(age)
         line = f"{pct:g}%" + (f" ({', '.join(notes)})" if notes else "")
