@@ -74,21 +74,43 @@ TOKEN_KINDS = tuple(WEIGHTS)
 #: The model whose tokens the rate is denominated in: a calibrated rate is points per weighted token of this
 #: model, and every other model's tokens are scaled to it by ``MODEL_PRICE_FACTORS`` first.
 REFERENCE_MODEL = "claude-opus-5-5"
-#: Each model's price per token relative to ``REFERENCE_MODEL``: the ratio of its list prices to the
-#: reference model's (input and output keep the same ratio within a model). Taken from Anthropic's published
-#: API price list as of 2026-11 (Opus 5.5 4/20, Sonnet 5.5 2/10, Haiku 5.5 0.10/0.50 up to 100K-token
-#: prompts, Fable 5.2 8/40, Fable 5.1 10/50 dollars per million tokens). Update this table when the price list
-#: changes or a model is added; keys are model id prefixes and the longest matching prefix wins. The account's
-#: points follow the price list, so without these factors one rate would stand for every model and the
-#: envelope's minimum would pick the window leaning most on the cheapest model (#1176).
+#: Each model's price per token of each kind relative to ``REFERENCE_MODEL``'s price for the same kind, so a
+#: token weighs ``WEIGHTS[kind] * MODEL_PRICE_FACTORS[model][kind]`` reference-model input tokens. ``WEIGHTS``
+#: (and the fitted cache-read weight) stay the reference model's own relative weights. One factor per model
+#: is not enough: the list prices cache reads at a different fraction of input per model (0.05 for Opus 5.5
+#: and Sonnet 5.5, 0.025 for Fable 5.2 and 5.1), and reads are most of an agent's tokens, so a single
+#: input/output ratio would weigh a Fable read twice an Opus read though both cost $0.20 per million.
+#:
+#: Source: the model table and model notes of the claude-api skill (models cached 2026-11-03; its
+#: shared/models.md and shared/prompt-caching.md), Anthropic's first-party API prices in dollars per million
+#: tokens. Input / output / cache read as listed:
+#:   Opus 5.5    4.00 / 20.00 / 0.20       Sonnet 5.5  2.00 / 10.00 / 0.10
+#:   Fable 5.2   8.00 / 40.00 / 0.20       Fable 5.1  10.00 / 50.00 / 0.25
+#:   Haiku 5.5   0.10 /  0.50 / not listed
+#: Cache writes are not listed per model except Fable 5.2 (5m 10.00, 1h 16.00); the list states them as
+#: 1.25x input for the 5-minute TTL and 2x input for the 1-hour TTL, so every model's write factors equal
+#: its input factor. Haiku 5.5's cache read price is not listed; it is derived from the list's general rule
+#: that cache reads cost 0.1x input, 0.01 dollars, so its read factor is 0.01 / 0.20 = 0.05 (derived, not
+#: listed). The Haiku 5.5 factors assume prompts under its long-prompt tier: beyond 100K-token prompts the
+#: list charges five times as much, which this table cannot express.
+#: Update this table when the price list changes or a model is added; keys are model id prefixes and the
+#: longest matching prefix wins. Without these factors one rate would stand for every model and the
+#: envelope's minimum would pick the window leaning most on the cheapest tokens (#1176).
+def _factors(input_: float, read: float, output: float) -> Dict[str, float]:
+    """Per-kind factors: both cache writes follow input (1.25x and 2x input on every model)."""
+    return {"input_tokens": input_, "cache_write_1h_tokens": input_, "cache_write_5m_tokens": input_,
+            "cache_read_input_tokens": read, "output_tokens": output}
+
+
 MODEL_PRICE_FACTORS = {
-    "claude-opus-5-5": 1.0,
-    "claude-sonnet-5-5": 0.5,
-    "claude-haiku-5-5": 0.025,
-    "claude-fable-5-2": 2.0,
-    "claude-fable-5-1": 2.5,
+    "claude-opus-5-5": _factors(1.0, 1.0, 1.0),        # 4 / 0.20 / 20
+    "claude-sonnet-5-5": _factors(0.5, 0.5, 0.5),      # 2 / 0.10 / 10
+    "claude-haiku-5-5": _factors(0.025, 0.05, 0.025),  # 0.10 / 0.01 derived / 0.50, short prompts only
+    "claude-fable-5-2": _factors(2.0, 1.0, 2.0),       # 8 / 0.20 / 40
+    "claude-fable-5-1": _factors(2.5, 1.25, 2.5),      # 10 / 0.25 / 50
 }
-#: A model missing from the table weighs as the reference model, and is reported (``model_factor``).
+#: A model missing from the table weighs as the reference model in every kind, and is reported
+#: (``model_factors``).
 UNPRICED_FACTOR = 1.0
 _UNPRICED_REPORTED: set = set()  # models already reported on stderr by this process
 
@@ -562,35 +584,48 @@ def weighted(row: Dict[str, int], cache_read_weight: Optional[float] = None) -> 
     return sum(w[k] * row.get(k, 0) for k in TOKEN_KINDS)
 
 
-def _price_factor(model: str) -> Optional[float]:
-    """The table's factor for ``model`` by longest matching prefix, or None when it has none."""
+def _price_factors(model: str) -> Optional[Dict[str, float]]:
+    """The table's per-kind factors for ``model`` by longest matching prefix, or None when it has none."""
     best = max((p for p in MODEL_PRICE_FACTORS if str(model).startswith(p)), key=len, default=None)
     return None if best is None else MODEL_PRICE_FACTORS[best]
 
 
 def is_priced(model: str) -> bool:
-    return _price_factor(model) is not None
+    return _price_factors(model) is not None
 
 
-def model_factor(model: str) -> float:
-    """``model``'s price relative to ``REFERENCE_MODEL``. A model the table lacks weighs
-    ``UNPRICED_FACTOR`` and is named on stderr, once per process; ``budget me`` names it too."""
-    f = _price_factor(model)
+def model_factors(model: str) -> Dict[str, float]:
+    """``model``'s price per token kind relative to ``REFERENCE_MODEL``'s same kind. A model the table lacks
+    weighs ``UNPRICED_FACTOR`` in every kind and is named on stderr, once per process; ``budget me`` names
+    it too."""
+    f = _price_factors(model)
     if f is not None:
         return f
     if model not in _UNPRICED_REPORTED:
         _UNPRICED_REPORTED.add(model)
         print(f"⚠️ MACF: usage meter: no price factor for model {model!r}; weighing it as {REFERENCE_MODEL} "
               f"({UNPRICED_FACTOR:g}). Add it to usage_meter.MODEL_PRICE_FACTORS", file=sys.stderr)
-    return UNPRICED_FACTOR
+    return {k: UNPRICED_FACTOR for k in TOKEN_KINDS}
+
+
+def priced_kinds(row: Dict[str, int], model: str, cache_read_weight: Optional[float] = None) -> Dict[str, float]:
+    """``row``'s tokens of each kind in weighted ``REFERENCE_MODEL`` input tokens: each kind's count times the
+    reference model's weight for that kind times the model's factor for that kind. A row with no tokens
+    needs no factors and reports nothing."""
+    if not weighted(row, cache_read_weight):
+        return {k: 0.0 for k in TOKEN_KINDS}
+    w = dict(WEIGHTS)
+    if cache_read_weight is not None:
+        w["cache_read_input_tokens"] = cache_read_weight
+    f = model_factors(model)
+    return {k: w[k] * f[k] * row.get(k, 0) for k in TOKEN_KINDS}
 
 
 def priced(row: Dict[str, int], model: str, cache_read_weight: Optional[float] = None) -> float:
-    """``row``'s weighted tokens in ``REFERENCE_MODEL`` tokens: weighted by kind, then by the model's price
-    factor. Everything that turns tokens into points uses this; ``weighted`` alone is kind-only, for the
-    tick fit, which fits a ratio per model itself. A row with no tokens needs no factor and reports nothing."""
-    w = weighted(row, cache_read_weight)
-    return w * model_factor(model) if w else 0.0
+    """``row``'s weighted tokens in ``REFERENCE_MODEL`` tokens, each kind priced by the model's factor for
+    that kind. Everything that turns tokens into points uses this; ``weighted`` alone is kind-only, for the
+    tick fit, which fits a ratio per model itself."""
+    return sum(priced_kinds(row, model, cache_read_weight).values())
 
 
 def priced_models(by_model: Dict[str, Dict[str, int]], cache_read_weight: Optional[float] = None) -> float:

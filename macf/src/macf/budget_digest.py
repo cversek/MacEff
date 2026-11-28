@@ -76,10 +76,7 @@ class Spend:
 def _spend(now: float, read_weight: Optional[float] = None) -> Optional[Spend]:
     """The last hour's spend, each event prorated over its calls' span, cache reads weighed at
     ``read_weight`` (the calibration's) when given."""
-    weights = dict(usage_meter.WEIGHTS)
-    if read_weight is not None:
-        weights["cache_read_input_tokens"] = read_weight
-    kinds = {k: 0.0 for k in usage_meter.TOKEN_KINDS}
+    kinds ={k: 0.0 for k in usage_meter.TOKEN_KINDS}
     by_cause: Dict[str, float] = {}
     calls = cache_read = 0
     latest = None
@@ -96,9 +93,8 @@ def _spend(now: float, read_weight: Optional[float] = None) -> Optional[Spend]:
         cause = d.get("cause") or "operator"
         by_model = d.get("by_model") or {}
         for model, r in by_model.items():
-            factor = usage_meter.model_factor(model) if usage_meter.weighted(r) else 0.0
-            for k in usage_meter.TOKEN_KINDS:
-                kinds[k] += f * factor * weights[k] * r.get(k, 0)
+            for k, v in usage_meter.priced_kinds(r, model, read_weight).items():
+                kinds[k] += f * v
             by_cause[cause] = by_cause.get(cause, 0.0) + f * usage_meter.priced(r, model, read_weight)
             cache_read += f * r.get("cache_read_input_tokens", 0)
         calls += f * n

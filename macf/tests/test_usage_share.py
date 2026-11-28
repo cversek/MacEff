@@ -551,7 +551,7 @@ def test_a_window_on_a_cheaper_model_bounds_the_rate_looser_and_never_pulls_the_
     half-price work that moved the account as much as main-model work did calibrates to the same rate."""
     end = _hour_end() - 86400
     main, cheap = usage_meter.REFERENCE_MODEL, "claude-sonnet-5-5"
-    half = usage_meter.MODEL_PRICE_FACTORS[cheap]
+    half = usage_meter.MODEL_PRICE_FACTORS[cheap]["input_tokens"]
     assert half == 0.5
     _write(_model_hours(main, [(4e7, 2.0)] * 16, end))
     on_main = usage_share.envelope(end + 60).calibration.rate
@@ -580,6 +580,53 @@ def test_an_unknown_model_weighs_as_the_reference_and_is_reported_once_and_in_bu
     _write([_metered_models(now - 60, {"claude-mystery-9": 1000, usage_meter.REFERENCE_MODEL: 1000})])
     text = usage_meter.format_summary(usage_meter.summarize(now - HOUR), "1h")
     assert "no price factor, weighed 1: claude-mystery-9" in text
+
+
+def test_a_fable_cache_read_weighs_as_an_opus_read_while_fable_output_weighs_twice():
+    """The list charges $0.20 per million cache reads on both Opus 5.5 and Fable 5.2, and Fable twice Opus for
+    output and for input, so the cache writes that follow input weigh twice too."""
+    opus, fable = usage_meter.REFERENCE_MODEL, "claude-fable-5-2"
+    read = {"cache_read_input_tokens": 1000, "calls": 1}
+    assert math.isclose(usage_meter.priced(read, fable), usage_meter.priced(read, opus))
+    assert math.isclose(usage_meter.priced(read, opus), 1000 * usage_meter.WEIGHTS["cache_read_input_tokens"])
+    out = {"output_tokens": 1000, "calls": 1}
+    assert math.isclose(usage_meter.priced(out, fable), 2 * usage_meter.priced(out, opus))
+    for kind in ("input_tokens", "cache_write_5m_tokens", "cache_write_1h_tokens"):
+        row = {kind: 1000, "calls": 1}
+        assert math.isclose(usage_meter.priced(row, fable), 2 * usage_meter.priced(row, opus))
+    # the fitted read weight still applies, scaled by the read factor
+    assert math.isclose(usage_meter.priced(read, fable, 0.2), usage_meter.priced(read, opus, 0.2))
+
+
+def test_a_sonnet_cache_read_weighs_half_an_opus_read():
+    opus, sonnet = usage_meter.REFERENCE_MODEL, "claude-sonnet-5-5"
+    read = {"cache_read_input_tokens": 1000, "calls": 1}
+    assert math.isclose(usage_meter.priced(read, sonnet), 0.5 * usage_meter.priced(read, opus))
+
+
+def test_the_longest_overlapping_prefix_wins(monkeypatch):
+    nine = {k: 9.0 for k in usage_meter.TOKEN_KINDS}
+    monkeypatch.setitem(usage_meter.MODEL_PRICE_FACTORS, "claude-opus-5", nine)
+    row = {"input_tokens": 1000, "calls": 1}
+    assert usage_meter.priced(row, "claude-opus-5-5-20261101") == 1000
+    assert usage_meter.priced(row, "claude-opus-5-20260101") == 9000
+
+
+def test_a_window_heavy_in_fable_cache_reads_does_not_pull_the_envelope_down():
+    """Twelve main-model hours of 4e7 input tokens move the counter 2 an hour; four Fable hours of 4e8 cache
+    reads cost the same at list price (0.1 weight, read factor 1.0) and move it as much, so the rate holds.
+    Weighing Fable reads at Fable's input ratio would double those hours' tokens and halve their bound."""
+    end = _hour_end() - 86400
+    main, fable = usage_meter.REFERENCE_MODEL, "claude-fable-5-2"
+    _write(_model_hours(main, [(4e7, 2.0)] * 16, end))
+    on_main = usage_share.envelope(end + 60).calibration.rate
+    _clear()
+    rows = _model_hours(main, [(4e7, 2.0)] * 12 + [(0, 2.0)] * 4, end)
+    rows += [{"timestamp": end - k * HOUR - 1800, "event": usage_meter.EVENT,
+              "data": {"by_model": {fable: {"cache_read_input_tokens": 4e8, "calls": 1}},
+                       "calls": 5, "cause": "operator"}} for k in range(4)]
+    _write(rows)
+    assert math.isclose(usage_share.envelope(end + 60).calibration.rate, on_main)
 
 
 def test_share_the_hook_hour_and_the_digest_weigh_each_model_by_its_price():

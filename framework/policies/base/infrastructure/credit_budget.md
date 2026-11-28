@@ -179,9 +179,14 @@ calibration's windows, the hook line, `budget me`, the digest and the sprint rec
 the price list, and the models differ there several-fold, so one rate for every model would let the minimum pick
 the window whose tokens were cheapest, the one leaning most on a less expensive model, and then price main-model
 hours at that rate: `me` would read low in the hours that cost most, by an amount the band of four does not catch.
-The factors are the list-price ratios to `claude-opus-5-5`, kept in a small table in the usage meter keyed by model
-id prefix (Sonnet 5.5 a half, Haiku 5.5 a fortieth, Fable 5.2 twice); the calibrated rate is therefore points per
-`claude-opus-5-5` token, and the calibration event records the factors it used. A model missing from the table
+The factors are the list-price ratios to `claude-opus-5-5`, **one per model and per token kind** (input, the two
+cache writes, cache reads, output), each against the main model's price for the same kind, kept in a small table in
+the usage meter keyed by model id prefix. One factor per model would not do: the list prices cache reads at a
+different fraction of input per model, so Fable 5.2 costs twice the main model for input and output but the same
+for a cache read, and reads are most of the tokens (Sonnet 5.5 is a half in every kind; Haiku 5.5 a fortieth, and a
+twentieth for reads, its read price derived from the list's tenth-of-input rule since the list gives none). The Haiku 5.5 factors assume
+prompts under its long-prompt price tier, beyond which the list charges five times as much. The calibrated rate is
+therefore points per `claude-opus-5-5` token, and the calibration event records the factors it used. A model missing from the table
 weighs as the main model and is never passed over silently: it is named once on stderr and in `budget me`, and the
 remedy is to add its ratio to the table when the price list changes or a model arrives.
 The rate is an upper bound, and it tightens as the agent works through hours in which the account barely moves. **So
