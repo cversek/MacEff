@@ -504,7 +504,32 @@ def test_a_seat_with_its_own_config_dir_reads_no_credential(monkeypatch):
     stored = json.dumps({"claudeAiOauth": {"expiresAt": 1_000_000, "refreshTokenExpiresAt": 2_000_000}})
     monkeypatch.setattr(budget, "read_credential", lambda: stored)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    assert credential_fingerprint() == (2000.0, 1000.0)
+    assert credential_fingerprint() == ("refresh", 2000.0)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/home/seat/.claude-seat")
     assert credential_fingerprint() is None
+
+
+def test_a_routine_refresh_ends_no_wait_and_only_a_new_login_does():
+    """The access token's end changes at every routine refresh. On a shared credential, a healthy session's
+    refresh must not end another session's login wait, or that session reads running while it still can't
+    authenticate. Only the refresh grant's end, which a new login moves, ends it; the access token's end
+    stands in only when no refresh grant is stated (Ira's review of #1163)."""
+    from macf.transcript_monitor.daemon import AuthWatch, CREDENTIAL_RECHECK_S
+    from macf.pd.login import credential_fingerprint
+    expired = {"type": "assistant", "isApiErrorMessage": True, "error": "authentication_failed",
+               "timestamp": "t", "message": {"role": "assistant", "model": "<synthetic>",
+                                             "content": [{"type": "text", "text": "Login expired"}]}}
+    stored = {"claudeAiOauth": {"expiresAt": 1_000_000, "refreshTokenExpiresAt": 2_000_000}}
+    clock = [0.0]
+    watch = AuthWatch(credential=lambda: credential_fingerprint(reader=lambda: json.dumps(stored)),
+                      clock=lambda: clock[0])
+    watch(expired)
+    stored["claudeAiOauth"]["expiresAt"] = 5_000_000                 # another session's routine refresh
+    clock[0] += CREDENTIAL_RECHECK_S
+    assert watch.state() == "Login expired"
+    stored["claudeAiOauth"]["refreshTokenExpiresAt"] = 9_000_000     # someone logged in again
+    clock[0] += CREDENTIAL_RECHECK_S
+    assert watch.state() is None
+    assert credential_fingerprint(reader=lambda: json.dumps({"claudeAiOauth": {"expiresAt": 3_000}})) == ("access", 3.0)
+    assert credential_fingerprint(reader=lambda: json.dumps({"claudeAiOauth": {}})) is None
 

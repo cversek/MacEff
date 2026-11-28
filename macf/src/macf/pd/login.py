@@ -114,10 +114,10 @@ def read_assessment(now: Optional[float] = None,
 
 
 def credential_fingerprint(reader: Optional[Callable[[], str]] = None) -> Optional[tuple]:
-    """The stored credential's two expiry dates, the refresh grant's and the access token's, as a
-    pair that changes when anyone logs in again on this account; None when there is no credential
-    to read or it states neither. Only those two fields are read, as in ``assess``: no token leaves
-    the read. A session waiting on its login compares this with the pair it saw when it failed, so
+    """What changes when anyone logs in again on this account: the stored credential's refresh grant end,
+    or its access token's end only when it states no refresh grant; None when there is no credential to
+    read or it states neither. Only those two fields are read, as in ``assess``: no token leaves
+    the read. A session waiting on its login compares this with what it saw when it failed, so
     one ``/login`` returns every session sharing the credential to running, not only the one it was
     typed in (MIS-0002-R19 (auth_failure_MUST_read_waiting_on_person))."""
     from macf.budget import BudgetError, read_credential
@@ -132,8 +132,15 @@ def credential_fingerprint(reader: Optional[Callable[[], str]] = None) -> Option
         return None  # noqa: MACEFF003 - no credential reachable is a state, not a fault: no dates to compare, so the wait stands
     # A credential that isn't the client's JSON raises: the caller warns and leaves the wait as it is.
     oauth = json.loads(raw).get("claudeAiOauth") or {}
-    pair = (_seconds(oauth.get("refreshTokenExpiresAt")), _seconds(oauth.get("expiresAt")))
-    return None if pair == (None, None) else pair
+    # The refresh grant's end changes only when someone logs in again. The access token's end changes at
+    # every routine refresh, so on a shared credential a healthy session's refresh would end the others'
+    # waits while they still can't authenticate (Ira's review of #1163). It is read only when the credential
+    # states no refresh grant at all.
+    refresh = _seconds(oauth.get("refreshTokenExpiresAt"))
+    if refresh is not None:
+        return ("refresh", refresh)
+    access = _seconds(oauth.get("expiresAt"))
+    return ("access", access) if access is not None else None
 
 
 def warn_seconds(declaration) -> float:

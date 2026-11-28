@@ -159,6 +159,16 @@ def test_a_session_waiting_on_its_login_is_attachable_to_log_in(tmp_path):
     assert "/login" in plan.reason and "Login expired" in plan.reason
 
 
+def test_the_attach_plan_gives_the_remedy_that_fits_the_wait(tmp_path):
+    """A login wait's plan says to run /login; a rejected API key's says to replace the key, never /login
+    (CTB on #1161, point 1; Ira's review of #1163)."""
+    login = _held_for_login(tmp_path, "Login expired")
+    assert "/login" in login.reason and "replace the rejected API key" not in login.reason
+    (tmp_path / "k").mkdir()
+    key = _held_for_login(tmp_path / "k", "Invalid API key", waiting_on="credential")
+    assert "replace the rejected API key" in key.reason and "/login" not in key.reason
+
+
 def test_the_login_is_read_from_waiting_on_not_from_the_words(tmp_path):
     """A status that carries what the client said, but no login wait, is not a login wait: the
     attach keys on the field (Ira on #1161, point 1)."""
