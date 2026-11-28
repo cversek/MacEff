@@ -160,11 +160,24 @@ means the true counter is at least `v` and below `v + 1`, so the bound has the s
 counter has only just passed its start reading and is just short of its end reading plus one, so the added one is
 nearly all real movement rather than rounding. No allowance for movement inside a sample gap is assumed, because none
 is needed: the bound holds however the account moved between two samples. The calibration is the smallest bound over
-both sets, so the step windows can only tighten it. The command prints the rate, the kind of window that set it
-(`hour` or `step`, also recorded in the event), its span and how many windows were considered; `--dry-run` prints
-without recording.
+both sets, so the step windows can only tighten it. Any fall of the counter between a window's two ends breaks it,
+whether or not the samples name a reset time, so a stale low reading or an unmarked weekly reset never ends a window
+below its start. As a second line of defence a bound at or below zero is refused and named in the output, never
+chosen: it is never a measurement, and with no positive bound there is no calibration and the command says why.
+The command prints the rate, the kind of window that set it (`hour` or `step`, also recorded in the event), its span
+and how many windows were considered, and beside it the tightest window that does not overlap the chosen one, with
+its rate and how many times the chosen rate it is (recorded as `runner_up`). The minimum goes to whichever window had
+this agent's tokens most over-counted, so a runner-up far above the chosen rate says the chosen window may be one
+window's measurement error. **A rate more than four times the provisional constant, or less than a quarter of it,
+is refused and not recorded**, and the command exits 1 saying why: so far from the price list it is more likely a
+meter fault than a measurement. Look at the window it names and the runner-up before anything else; there is no
+override, and the provisional rate or the previous calibration stays in force. `--dry-run` prints without
+recording, and says when a real run would be refused.
 Cache reads weigh a tenth of fresh input, a constant chosen by an earlier fit that agreed with the price list. The
-rate is an upper bound, and it tightens as the agent works through hours in which the account barely moves; until
+rate is an upper bound, and it tightens as the agent works through hours in which the account barely moves. **So
+`me` is an upper bound on this agent's points, not an estimate**: it errs high by construction, and the figures of
+several seats on one account added together come to more than the account moved. `budget me` says so on its own
+line; the hook line keeps the bare figure. Until
 the first calibration the provisional constant stands in, marked `~`. `part` marks an hour not fully metered.
 
 The account's movement is kept only as a sanity check. When this agent's points over a window come to more than the

@@ -261,7 +261,8 @@ def test_the_views_print_exactly_this():
                           account=12.0, remainder=7.5, read_weight=0.1)
     assert usage_share.format_share(s) == (
         "share, last 24h (calibrated)\n  me        4.50\n  account  12.00\n"
-        "  others    7.50\n  my share 38%\n  cache read weight 0.1\n  others = other agents + unmetered use")
+        "  others    7.50\n  my share 38%\n  me is an upper bound: rate = min of upper bounds\n"
+        "  cache read weight 0.1\n  others = other agents + unmetered use")
     unknown = usage_share.Share(window_h=6, weighted_tokens=1e6, rate=P, rate_source="provisional", points=0.04,
                                 account=None, remainder=None)
     assert usage_share.format_share(unknown) == (
@@ -436,3 +437,92 @@ def test_me_above_the_account_long_after_calibrating_says_the_calibration_looks_
     assert usage_share.hook_suffix(now) == f"· me !{_fmt(3.6)}%/1h"
     out = usage_share.me_lines(1)
     assert "looks stale; run budget calibrate" in out and "loose" not in out
+
+
+# ── falls inside a window, refused bounds, the next window and the sanity band ──
+
+@pytest.mark.parametrize("readings,odd", [
+    # a stale low reading: 37, 37, 36, 37 at samples 7 to 10
+    ([35, 36, 36, 36, 36, 37, 37, 37, 37, 36, 37, 37, 37, 37, 38], 9),
+    # a weekly reset whose samples carry no resets_at
+    ([90, 91, 91, 91, 91, 92, 92, 92, 92, 0, 1, 1, 1, 1, 2], 9),
+])
+def test_a_fall_of_the_counter_inside_a_step_window_breaks_it_without_a_reset_time(readings, odd):
+    """Samples every 20 minutes, none with a reset time, 2e6 tokens in each gap. Without the fall check a
+    step window from the second step-up to the sample at ``odd`` ends below its start, bound at or below
+    zero. With it, no window spans that sample and the calibration is the 1h window of delta 0."""
+    end = _hour_end() - 86400
+    begin = end - 5 * HOUR
+    t = [begin + k * 1200 for k in range(len(readings))]
+    rows = [_sample(tk, float(v)) for tk, v in zip(t, readings, strict=True)]
+    rows += [_metered(tk + 600, 2e6) for tk in t[:-1]]
+    _write(rows)
+    step = usage_share._step_windows(end - usage_share.LOOKBACK_DAYS * 24 * HOUR, end + 60)
+    assert step.windows and all(not (w["start"] <= t[odd] <= w["end"]) for w in step.windows)
+    att = usage_share.envelope(end + 60)
+    assert att.refused == () and att.calibration.rate == pytest.approx(1.0 / 6e6)
+    w = att.calibration.window
+    assert w["kind"] == "step" and w["delta"] == 0.0 and not (w["start"] <= t[odd] <= w["end"])
+
+
+def _win(start, end, bound, kind="hour", delta=1.0, tokens=1e7):
+    return {"kind": kind, "start": start, "end": end, "hours": (end - start) / HOUR, "delta": delta,
+            "tokens": tokens, "bound": bound}
+
+
+def _windows(monkeypatch, hour=(), step=()):
+    monkeypatch.setattr(usage_share, "_hour_windows", lambda *a: usage_share._Windows(windows=tuple(hour)))
+    monkeypatch.setattr(usage_share, "_step_windows", lambda *a: usage_share._Windows(windows=tuple(step)))
+
+
+def test_the_envelope_refuses_a_bound_at_or_below_zero_names_it_and_never_returns_one(monkeypatch):
+    now = _hour_end() - 86400
+    zero = _win(now - 5 * HOUR, now - 4 * HOUR, 0.0, delta=-1.0)
+    below = _win(now - 3 * HOUR, now - 2 * HOUR, -1e-7, kind="step", delta=-2.0)
+    good = _win(now - 9 * HOUR, now - 8 * HOUR, 5e-8)
+    _windows(monkeypatch, hour=[zero, good], step=[below])
+    att = usage_share.envelope(now)
+    assert att.calibration.rate == 5e-8 and att.calibration.windows == 3
+    assert att.refused == (zero, below)
+    out = usage_share.format_calibration(att, False)
+    assert "refused 2 window(s) with a bound at or below zero" in out
+    assert "a hour window" in out and "account -1," in out and "a step window" in out and "account -2," in out
+    _windows(monkeypatch, hour=[zero], step=[below])
+    att = usage_share.envelope(now)
+    assert att.calibration is None and "at or below zero" in att.reason and len(att.refused) == 2
+    out = usage_share.format_calibration(att, False)
+    assert out.startswith("no calibration: all 2 windows have a bound at or below zero")
+    assert "account -1," in out and "provisional rate" in out
+
+
+def test_calibrate_reports_and_records_the_tightest_window_not_overlapping_the_chosen_one(monkeypatch):
+    """The chosen window spans 0 to 2h; one at 1 to 3h is tighter than the third but overlaps it, so
+    the next tightest is the window at 3 to 4h, which touches the chosen one without overlapping."""
+    now = _hour_end() - 86400
+    s = now - 10 * HOUR
+    chosen, overlapping = _win(s, s + 2 * HOUR, 4e-8), _win(s + HOUR, s + 3 * HOUR, 4.4e-8, kind="step")
+    apart = _win(s + 2 * HOUR, s + 3 * HOUR, 8e-8)
+    _windows(monkeypatch, hour=[chosen, apart], step=[overlapping])
+    out = usage_share.calibrate(dry_run=False, now=now)
+    assert out.recorded and not out.refused
+    assert "next tightest window not overlapping it: rate 8e-08, 2x the chosen" in out.text
+    ev = list(read_events(reverse=False, scope="all", only=usage_share.CALIBRATION_EVENT))[-1]["data"]
+    assert ev["runner_up"] == {**usage_share._bare(apart), "rate": 8e-8}
+    assert usage_share.calibration().runner_up["rate"] == 8e-8
+    _windows(monkeypatch, hour=[chosen], step=[overlapping])
+    assert "no other window that does not overlap it" in usage_share.run_calibrate(dry_run=True, now=now)
+
+
+@pytest.mark.parametrize("factor,refused", [(5.0, True), (1 / 5.0, True), (3.9, False), (1 / 3.9, False)])
+def test_calibrate_refuses_a_rate_outside_a_factor_of_four_of_the_provisional_constant(monkeypatch, factor, refused):
+    now = time.time()
+    _windows(monkeypatch, hour=[_win(now - 5 * HOUR, now - 4 * HOUR, P * factor)])
+    n = lambda: len(list(read_events(reverse=False, scope="all", only=usage_share.CALIBRATION_EVENT)))
+    dry = usage_share.calibrate(dry_run=True)
+    assert dry.refused is refused and not dry.recorded and n() == 0
+    assert ("a real run would be refused" in dry.text) is refused and dry.text.startswith("calibrated rate")
+    assert (f"outside the band of {usage_share.SANITY_FACTOR:g}x" in dry.text) is refused
+    from macf.cli import main
+    with pytest.raises(SystemExit) as e:
+        main(["budget", "calibrate"])
+    assert (e.value.code == 1) is refused and n() == (0 if refused else 1)

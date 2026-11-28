@@ -834,8 +834,9 @@ def cmd_budget_ticks(args: argparse.Namespace) -> int:
 
 def cmd_budget_calibrate(args: argparse.Namespace) -> int:
     from macf import usage_share
-    print(usage_share.run_calibrate(dry_run=args.dry_run))
-    return 0
+    out = usage_share.calibrate(dry_run=args.dry_run)
+    print(out.text)
+    return 1 if out.refused and not args.dry_run else 0
 
 
 def cmd_budget_mode_set(args: argparse.Namespace) -> int:
